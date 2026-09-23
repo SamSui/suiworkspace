@@ -53,6 +53,13 @@ class NotFound(AppError):
     code = "not_found"
 
 
+class Conflict(AppError):
+    """资源冲突（如用户名重复等唯一性约束）。"""
+
+    status_code = 409
+    code = "conflict"
+
+
 class RateLimited(AppError):
     """触发限流。"""
 

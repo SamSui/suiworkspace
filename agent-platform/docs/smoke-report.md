@@ -1,17 +1,57 @@
 # 增量 2 门禁 · 运行时冒烟报告
 
 > 执行：随研发 ｜ 日期：2026-09-23 ｜ 对应门禁：架构裁决《SUIG-10 增量1 验收裁决》第四节
+> 更新：授权后（Python 3.12 建 venv + 装依赖）门禁 2/3/4 全部实跑通过；增量 2.1 增补门禁 5（用户与鉴权闭环）、**增量 2.2 增补门禁 6（知识库 CRUD + 权限）**均实跑通过。
 
-## 0. 结论
+## 0. 最终结论
 
 | 门禁项 | 状态 | 说明 |
 |---|---|---|
-| 1. compose 六服务全部 healthy | ✅ **通过** | 六服务实测 healthy，且逐项做了功能性验证（非只看 healthy 灯） |
-| 2. 四类存储客户端 `connect` + `health()` 实跑 | ⛔ **阻塞** | 需安装 Python 依赖（授权待批） |
-| 3. FastAPI 实跑启动 + OpenAPI 可访问 | ⛔ **阻塞** | 同上 |
-| 4. `AsyncRedisSaver` 构造 + `asetup()` 实跑 | ⛔ **阻塞** | 同上 |
+| 1. compose 六服务全部 healthy | ✅ **通过** | 六服务实测 healthy，且逐项做了功能性验证 |
+| 2. 四类存储客户端 `connect` + `health()` 实跑 | ✅ **通过** | `/healthz` 返回 200，四类全 ok |
+| 3. FastAPI 实跑启动 + OpenAPI 可访问 | ✅ **通过** | openapi.json 200，路由齐全 |
+| 4. `AsyncRedisSaver` 构造 + `asetup()` 实跑 | ✅ **通过** | `asetup() OK` + redis roundtrip |
+| 5.（增量 2.1）用户与鉴权闭环 | ✅ **通过** | 注册→换 JWT→放行；无/过期 token → 401 |
+| 6.（增量 2.2）知识库 CRUD + 权限 | ✅ **通过** | owner 全生命周期；越权访问他人 kb → 404 |
 
-**冒烟本身就抓到了 2 个真实缺陷**（只有真跑才会暴露）——见第 3 节。
+**冒烟共抓到 6 处运行期缺陷**（"编译通过 ≠ 跑得起来"的直接证据），全部已修；增量 2.1/2.2 增补门禁 5/6 后 **OVERALL: PASS**。
+
+## 增量 2.1 增补：用户与鉴权闭环（门禁 5）
+
+| 步骤 | 实测 |
+|---|---|
+| `POST /v1/users` 注册 | 201，`api_key` 明文仅回显一次 |
+| `POST /v1/auth/token` 换 JWT | 200，`token_type=bearer` |
+| 无 token 访问 `/v1/users/me` | 401 ✅ |
+| 过期 token 访问 `/v1/users/me` | 401 ✅ |
+| 合法 token 访问 `/v1/users/me` | 200 ✅ |
+
+**说明**：鉴权不引入新第三方契约——JWT 用主依赖 `pyjwt`，api_key 哈希用标准库 `sha256`；`api_key` 只存哈希不存明文，轮换即整行替换。
+
+## 增量 2.2 增补：知识库 CRUD + 权限闭环（门禁 6）
+
+| 步骤 | 实测 |
+|---|---|
+| owner `POST /v1/kb` 创建 | 201 |
+| owner `GET` / `PATCH` `/v1/kb/{id}` | 200 |
+| 越权访问他人 kb（GET/PATCH/DELETE） | **404** ✅（与不存在同语义，不泄漏存在性） |
+| 无 token 访问 `/v1/kb` | 401 ✅ |
+| owner DELETE 软删 → 之后再 GET | 204 → 404 ✅（status=0 不可见） |
+
+**说明**：`/v1/kb` 全套 CRUD；`get/update/delete` 全部经 `require_kb_access`（`kb_access` 依赖）在查询路径以 `owner_id` 强制归属校验，越权与不存在统一 `NotFound(404)`。
+
+## 补充(授权后第二轮)：Python 依赖相关修复
+
+冒烟在其正跑通前暴露了 6 处仅运行期可见的问题，已全部修复并复验通过：
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| 3.1 | MinIO 旧 pin 已下架 | pin 到实测 `RELEASE.2024-01-05T22-17-24Z` |
+| 3.2 | MinIO healthcheck 用不存在 curl | 改用内置 `mc ready local`；并修废弃 env |
+| 3.3 | `python-multipart` 缺失 | 移入 pyproject 主依赖 |
+| 3.4 | FastAPI 拒绝 `_` 前缀参数 | 5 个占位路由修名 |
+| 3.5 | ES SDK 9.x 不兼容服务端 8.13 | pin `<9`（8.x SDK 发 compatible-with=8） |
+| 3.6 | RedisSaver 需 RediSearch | compose 改 `redis/redis-stack-server` |
 
 ---
 

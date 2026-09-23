@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 PROBE_TIMEOUT_SECONDS = 5.0
 
 
-async def check_all(container: "StorageContainer") -> tuple[bool, list[HealthResult], dict[str, Any]]:
+async def check_all(container: StorageContainer) -> tuple[bool, list[HealthResult], dict[str, Any]]:
     """返回 (全部健康?, 各存储结果, 汇总信息)。"""
     stores = container.all()
     results = await asyncio.gather(

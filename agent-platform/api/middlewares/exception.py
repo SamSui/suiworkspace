@@ -37,7 +37,10 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
             "app error",
             extra={"extra_fields": {"code": exc.code, "path": request.url.path}},
         )
-    return JSONResponse(status_code=exc.status_code, content=_payload(exc.code, exc.message, exc.detail))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_payload(exc.code, exc.message, exc.detail),
+    )
 
 
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

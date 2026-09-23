@@ -15,11 +15,15 @@ dependencies = [
     "pydantic-settings>=2.3",
     "httpx>=0.27",
     "pyjwt>=2.8",
+    # FastAPI 的 File/Form 依赖 python-multipart，否则应用启动即报错（冒烟门禁暴露）
+    "python-multipart>=0.0.9",
     # --- 存储层 ---
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncmy>=0.2.9",
     "pymilvus>=2.4.4",
-    "elasticsearch[async]>=8.13",
+    # elasticsearch 8.x 严格限制：9.x SDK 默认发 compatible-with=9，8.x 服务端(8.13)会 400 拒绝。
+    # 冒烟门禁暴露。pin <9 使 SDK 与 compose 里 ES 8.13 匹配（8.x SDK 原生发 compatible-with=8）。
+    "elasticsearch[async]>=8.13,<9",
     "redis>=5.0.4",
     # --- 编排层 ---
     "langgraph>=0.2.0",
@@ -56,6 +60,12 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+# FastAPI 的 File()/Form() 必须作为参数默认值出现（框架约定），B008 会误报。
+# scripts/smoke.py 是独立可执行脚本，需在 import core 前改 sys.path（E402 是预期行为）。
+[tool.ruff.lint.per-file-ignores]
+"api/routers/*.py" = ["B008"]
+"scripts/smoke.py" = ["E402", "E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

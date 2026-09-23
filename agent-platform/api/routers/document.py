@@ -27,19 +27,19 @@ class DocumentOut(BaseModel):
 
 @router.post("", response_model=DocumentOut, status_code=202)
 async def upload_document(
-    _kb_id: int = Form(...),
-    _file: UploadFile = File(...),
+    kb_id: int = Form(...),
+    file: UploadFile = File(...),
 ) -> None:
     """上传文档并入队摄入。返回 202 与 document 记录（status=0）。"""
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.get("/{doc_id}", response_model=DocumentOut)
-async def get_document(_doc_id: int) -> None:
+async def get_document(doc_id: int) -> None:
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.delete("/{doc_id}", status_code=204)
-async def delete_document(_doc_id: int) -> None:
+async def delete_document(doc_id: int) -> None:
     """删除文档：级联清理 ES / Milvus 两侧数据（按 doc_id）。"""
     raise NotImplementedYet(_INCREMENT)

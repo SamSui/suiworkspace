@@ -1,7 +1,8 @@
 """Elasticsearch 索引 mapping。
 
 对应《TechnicalDesign》§2.2.3：存 chunk 原文与过滤字段。
-`kb_id` / `doc_id` 用 keyword（term 过滤 + 聚合），`text` 走 BM25，`title` 额外做 ngram 提升短词命中。
+`kb_id` / `doc_id` 用 keyword（term 过滤 + 聚合），`text` 走 BM25，`title` 额外做
+ngram 提升短词命中。
 """
 
 from __future__ import annotations

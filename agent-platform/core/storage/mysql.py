@@ -53,7 +53,9 @@ class MySQLStore(BaseStore):
             self._engine, expire_on_commit=False, autoflush=False
         )
         self._connected = True
-        logger.info("mysql store connected", extra={"extra_fields": {"host": s.host, "db": s.database}})
+        logger.info(
+            "mysql store connected", extra={"extra_fields": {"host": s.host, "db": s.database}}
+        )
 
     async def close(self) -> None:
         if self._engine is not None:

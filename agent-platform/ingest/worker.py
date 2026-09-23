@@ -95,7 +95,9 @@ async def cleanup_partial(container: StorageContainer, doc_id: int, kb_id: int) 
 
 async def load_document(container: StorageContainer, doc_id: int) -> Document | None:
     async with container.mysql.session() as session:
-        return (await session.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
+        return (
+            await session.execute(select(Document).where(Document.id == doc_id))
+        ).scalar_one_or_none()
 
 
 # ---------------------------------------------------------------------------

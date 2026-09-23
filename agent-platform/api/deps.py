@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AuthenticationError, NotFound
 from core.logging import get_logger
 from core.storage import StorageContainer
-from db.models import KnowledgeBase, User
+from db.models import Conversation, KnowledgeBase, User
 
 logger = get_logger(__name__)
 
@@ -76,9 +76,48 @@ async def require_kb_access(
     return kb
 
 
+async def kb_access(
+    kb_id: int,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> KnowledgeBase:
+    """FastAPI 依赖形态的 `require_kb_access`：把路径参数 `kb_id` 绑定进来。
+
+    需要读写某个知识库的路由，直接用 `Depends(kb_access)` 即可拿到已通过归属校验的 KB。
+    校验失败与不存在统一抛 `NotFound(404)`（不泄漏存在性，裁决 #4）。
+    注：`current_user` 与这里的 `get_session` 是同一 callable，FastAPI 按依赖去重，
+    两者共享同一会话实例。
+    """
+    return await require_kb_access(kb_id, user, session)
+
+
 CurrentUser = Annotated[User, Depends(current_user)]
 DBSession = Annotated[AsyncSession, Depends(get_session)]
 Container = Annotated[StorageContainer, Depends(get_container)]
+
+
+async def require_thread_access(
+    thread_id: str, user: User, session: AsyncSession
+) -> Conversation:
+    """以 thread_id 取「当前用户拥有」的会话，供续接类路由做归属校验。
+
+    只做归属校验（不接检索 / 生成逻辑）：该线程不存在、非当前用户所有或已停用，
+    统一抛 `NotFound(404)`——与知识库越权同语义，不泄漏他人 thread 是否存在。
+    由路由显式调用（普通函数，不带 FastAPI 依赖，避免与原 body 的 thread_id 冲突）。
+
+    Returns:
+        Conversation：已确认归属的会话行。
+    """
+    stmt = select(Conversation).where(Conversation.thread_id == thread_id)
+    conv = (await session.execute(stmt)).scalar_one_or_none()
+
+    if conv is None or conv.status != "active" or conv.user_id != int(user.id):
+        logger.info(
+            "thread access denied",
+            extra={"extra_fields": {"thread_id": thread_id, "user_id": user.id}},
+        )
+        raise NotFound("会话不存在")
+    return conv
 
 
 __all__ = [
@@ -89,5 +128,7 @@ __all__ = [
     "get_container",
     "get_session",
     "get_user_id",
+    "kb_access",
     "require_kb_access",
+    "require_thread_access",
 ]

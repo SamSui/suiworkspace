@@ -11,13 +11,13 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     SmallInteger,
     String,
     UniqueConstraint,
@@ -50,7 +50,7 @@ class User(Base, TimestampMixin):
     api_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
-    knowledge_bases: Mapped[list["KnowledgeBase"]] = relationship(
+    knowledge_bases: Mapped[list[KnowledgeBase]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
 
@@ -67,7 +67,7 @@ class KnowledgeBase(Base, TimestampMixin):
     status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     owner: Mapped[User] = relationship(back_populates="knowledge_bases")
-    documents: Mapped[list["Document"]] = relationship(
+    documents: Mapped[list[Document]] = relationship(
         back_populates="knowledge_base", cascade="all, delete-orphan"
     )
 
@@ -118,7 +118,7 @@ class Conversation(Base, TimestampMixin):
     thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'active'"))
 
-    messages: Mapped[list["Message"]] = relationship(
+    messages: Mapped[list[Message]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan"
     )
 

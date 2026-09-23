@@ -30,10 +30,10 @@ class AgentConfigOut(AgentConfigCreate):
 
 
 @router.get("", response_model=list[AgentConfigOut])
-async def list_agent_configs(_kb_id: int) -> None:
+async def list_agent_configs(kb_id: int) -> None:
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.post("", response_model=AgentConfigOut, status_code=201)
-async def create_agent_config(_payload: AgentConfigCreate) -> None:
+async def create_agent_config(payload: AgentConfigCreate) -> None:
     raise NotImplementedYet(_INCREMENT)
