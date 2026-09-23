@@ -72,6 +72,43 @@ class MilvusStore(BaseStore):
             raise StorageUnavailable("milvus 尚未连接，请先调用 connect()")
         return self._client
 
+    # ---------- 写入（摄入 4.3/4.4 用）----------
+
+    async def insert(self, rows: list[dict[str, Any]]) -> None:
+        """批量插入向量行（chunk_id/kb_id/doc_id/content_len/embedding）。
+
+        同步 SDK 调用经 `asyncio.to_thread` 卸载，不阻塞事件循环（增量 1 铁律）。
+        插入后**主动 flush**：保证「写入后可即刻被检索」不变量（pymilvus 2.x 插入
+        不一定立即可见，检索侧 follow-after-write 需要 flush）。
+        """
+        if not rows:
+            return
+        client = self.client
+        collection = self._settings.collection
+
+        def _run() -> None:
+            client.insert(collection_name=collection, data=rows)
+            client.flush(collection)
+
+        await asyncio.to_thread(_run)
+
+    async def delete_by_doc_id(self, doc_id: str) -> int:
+        """按 doc_id 清理残留（可重入前提，裁决 #3）。
+
+        收口增量 3 登记的待办：worker 不再直接拿同步 client.delete 阻塞事件循环。
+        返回删除条数（Milvus 返回 dictate；此处取最外层计数，失败不必阻断——查询侧兜底）。
+        """
+        client = self.client
+        collection = self._settings.collection
+
+        def _run() -> int:
+            res = client.delete(collection_name=collection, filter=f'doc_id == "{doc_id}"')
+            if isinstance(res, dict):
+                return int(res.get("delete_count") or 0)
+            return int(res or 0)
+
+        return await asyncio.to_thread(_run)
+
     # ---------- 检索（供 langgraph 节点调用）----------
 
     async def search(

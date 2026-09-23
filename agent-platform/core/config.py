@@ -140,6 +140,7 @@ class IngestSettings(_Section):
     chunk_overlap: int = 100
     max_document_mb: int = 200
     allowed_extensions: str = ".pdf,.docx,.md,.txt"
+    data_dir: str = "data/uploads"  # 摄入源文件落盘根目录：{data_dir}/{kb_id}/{doc_id}/{file_name}
 
     @property
     def allowed_ext_set(self) -> set[str]:

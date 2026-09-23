@@ -83,6 +83,46 @@ class ESStore(BaseStore):
         logger.info("es index created", extra={"extra_fields": {"index": index}})
         return True
 
+    # ---------- 写入（摄入 4.4 双写 / 清理用）----------
+
+    async def bulk_index(self, documents: list[dict[str, Any]]) -> None:
+        """批量写原文切片。`_id` 由入参 chunk_id 固定 → 重跑天然幂等覆盖（不残留重复切片）。
+
+        用 elasticsearch-py 8.x 的 `operations` 扁平格式：每条 `{action 头} + {source}`。
+        """
+        if not documents:
+            return
+        client = self.client
+        operations: list[dict[str, Any]] = []
+        for doc in documents:
+            chunk_id = str(doc.get("chunk_id"))
+            if not chunk_id:
+                raise ValueError(f"ES 写入缺少 chunk_id: {doc}")
+            operations.append({"index": {"_index": self._settings.index, "_id": chunk_id}})
+            operations.append(doc)
+        resp = await client.bulk(operations=operations, refresh=True)
+        if resp.get("errors"):
+            failed = [
+                item for item in resp.get("items", [])
+                if any(action.get("error") for action in item.values())
+            ]
+            detail = failed[0] if failed else resp
+            raise RuntimeError(f"ES bulk 写入部分失败: {detail}")
+        logger.info(
+            "es bulk indexed",
+            extra={"extra_fields": {"count": len(documents), "index": self._settings.index}},
+        )
+
+    async def delete_by_doc_id(self, kb_id: str, doc_id: str) -> int:
+        """按 kb_id+doc_id 清理残留——重跑摄入前的可重入清理（裁决 #3）。"""
+        client = self.client
+        from db.mappings_es import delete_by_doc_id_body
+
+        resp = await client.delete_by_query(
+            index=self._settings.index, **delete_by_doc_id_body(kb_id, doc_id)
+        )
+        return int(resp.get("deleted") or 0)
+
     # ---------- 检索（供 langgraph 节点调用）----------
 
     async def keyword_search(
