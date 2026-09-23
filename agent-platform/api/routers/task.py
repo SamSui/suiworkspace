@@ -25,5 +25,5 @@ class TaskOut(BaseModel):
 
 
 @router.get("/{task_id}", response_model=TaskOut)
-async def get_task(_task_id: str) -> None:
+async def get_task(task_id: str) -> None:
     raise NotImplementedYet(_INCREMENT)

@@ -12,9 +12,9 @@ from typing import Any
 import jwt
 from starlette.datastructures import Headers
 
+from api.middlewares.common import is_public, send_json
 from core.config import Settings
 from core.logging import get_logger
-from api.middlewares.common import is_public, send_json
 
 logger = get_logger(__name__)
 

@@ -105,7 +105,9 @@ class ESStore(BaseStore):
             "size": top_k,
         }
         if highlight:
-            body["highlight"] = {"fields": {"text": {"fragment_size": 120, "number_of_fragments": 1}}}
+            body["highlight"] = {
+                "fields": {"text": {"fragment_size": 120, "number_of_fragments": 1}}
+            }
 
         resp = await client.search(index=self._settings.index, **body)
         hits: list[dict[str, Any]] = []

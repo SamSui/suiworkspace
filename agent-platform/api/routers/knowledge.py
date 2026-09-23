@@ -33,10 +33,10 @@ async def list_knowledge_bases() -> None:
 
 
 @router.post("", response_model=KnowledgeBaseOut, status_code=201)
-async def create_knowledge_base(_payload: KnowledgeBaseCreate) -> None:
+async def create_knowledge_base(payload: KnowledgeBaseCreate) -> None:
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseOut)
-async def get_knowledge_base(_kb_id: int) -> None:
+async def get_knowledge_base(kb_id: int) -> None:
     raise NotImplementedYet(_INCREMENT)

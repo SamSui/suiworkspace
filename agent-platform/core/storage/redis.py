@@ -89,7 +89,9 @@ class RedisStore(BaseStore):
 
     # ---------- 限流（设计文档 §9.1：Redis 滑动窗口）----------
 
-    async def hit_rate_limit(self, identity: str, *, limit: int, window_seconds: int) -> tuple[bool, int]:
+    async def hit_rate_limit(
+        self, identity: str, *, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
         """返回 (是否放行, 当前窗口计数)。按 identity（user_id / IP）分组。"""
         key = f"{self._settings.prefix_rate_limit}{identity}:{window_seconds}"
         current = int(await self.client.eval(_SLIDING_WINDOW_LUA, 1, key, window_seconds))

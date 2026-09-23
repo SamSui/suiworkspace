@@ -23,18 +23,18 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/chat")
-async def chat(_req: ChatRequest) -> None:
+async def chat(req: ChatRequest) -> None:
     """非流式对话。"""
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.post("/chat/stream")
-async def chat_stream(_req: ChatRequest) -> None:
+async def chat_stream(req: ChatRequest) -> None:
     """SSE 流式对话——网关侧只做透传，不缓冲。"""
     raise NotImplementedYet(_INCREMENT)
 
 
 @router.post("/chat/resume")
-async def chat_resume(_thread_id: str, _value: str) -> None:
+async def chat_resume(thread_id: str, value: str) -> None:
     """Human-in-the-loop 恢复：从 RedisSaver 的 checkpoint 续跑。"""
     raise NotImplementedYet(_INCREMENT)

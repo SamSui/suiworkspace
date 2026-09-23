@@ -10,9 +10,9 @@ from typing import Any
 
 from starlette.datastructures import Headers
 
+from api.middlewares.common import is_public, send_json
 from core.config import Settings
 from core.logging import get_logger
-from api.middlewares.common import is_public, send_json
 
 logger = get_logger(__name__)
 
@@ -70,7 +70,8 @@ class RateLimitMiddleware:
                 {
                     "error": {
                         "code": "rate_limited",
-                        "message": f"请求过于频繁（{current}/{self.DEFAULT_LIMIT} per {self.WINDOW_SECONDS}s）",
+                        "message": f"请求过于频繁（{current}/{self.DEFAULT_LIMIT} "
+                        f"per {self.WINDOW_SECONDS}s）",
                     }
                 },
                 extra_headers=[(b"retry-after", retry_after.encode())],

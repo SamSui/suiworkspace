@@ -36,15 +36,22 @@ services:
     networks: [ap-net]
 
   redis:
-    image: redis:7-alpine
+    # LangGraph checkpoint（RedisSaver）需要 RediSearch 模块（FT.INFO/FT.CREATE），
+    # 裸 redis 镜像不含，冒烟门禁暴露（asetup() 报 unknown command 'FT.INFO'）。
+    # 用 redis-stack-server（预装 RediSearch/JSON/Timeseries/Bloom）。
+    # 注意：必须走镜像默认 entrypoint（/entrypoint.sh），它会 --loadmodule 全部模块；
+    # 若覆盖 command=redis-server 会绕过模块加载，故额外参数经镜像支持的 REDIS_ARGS 注入。
+    image: redis/redis-stack-server:7.2.0-v12
     container_name: ap-redis
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    environment:
+      # 追加给 redis-server 的调优参数（appendonly 已由镜像默认开启）
+      REDIS_ARGS: --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli ping && redis-cli FT._LIST"]
       interval: 10s
       timeout: 3s
       retries: 10
