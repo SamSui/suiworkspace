@@ -1,7 +1,7 @@
 # agent-platform — 智能体中台（研发落地骨架）
 
 > SUIG-10 首个研发增量。设计依据：`TechnicalDesign.md` v1.0 + 架构裁决 `adjudication.md`。
-> 状态：**增量 1（骨架 + 存储层 + 开发栈）已实现**；**增量 2.1（用户与鉴权体系）已实现**；langgraph 编排 / ingest / 部署可观测为后续子任务（见 `docs/increment-1-breakdown.md`）。
+> 状态：**增量 1（骨架 + 存储层 + 开发栈）已实现**；**增量 2.1（用户与鉴权体系）、2.2（知识库 CRUD + 权限）已实现**；langgraph 编排 / ingest / 部署可观测为后续子任务（见 `docs/increment-1-breakdown.md`）。
 
 ## 1. 目录结构
 
@@ -10,7 +10,7 @@ agent-platform/
 ├─ api/                    # 进程组 ①：FastAPI 网关注入服务（对外 HTTP/WS/SSE）
 │  ├─ main.py              # 应用工厂 + lifespan + 中间件装配
 │  ├─ deps.py              # 依赖注入（当前用户、存储容器）
-│  ├─ routers/             # health / auth / users（2.1 实现）+ chat / knowledge / document / agent / task（占位）
+│  ├─ routers/             # health / auth / users / knowledge（2.1/2.2 实现）+ chat / document / agent / task（占位）
 │  ├─ middlewares/         # 鉴权、限流、trace 埋点、全局异常
 │  └─ schemas/             # Pydantic v2 请求/响应模型
 ├─ langgraph_service/      # 进程组 ②：LangGraph 独立编排服务（内网 HTTP+SSE）
@@ -89,7 +89,8 @@ curl http://127.0.0.1:8000/healthz/live
 | `deploy/docker-compose.yml`（四组件开发栈） | ✅ 已实现 |
 | `api/` 应用工厂 + 中间件装配 + `/healthz` | ✅ 已实现 |
 | `api/` 用户与鉴权（`/v1/auth`、`/v1/users`，JWT + api_key 哈希轮换） | ✅ 已实现（增量 2.1） |
-| `api/` 业务路由（chat/knowledge/document/agent/task） | ⏳ 骨架占位，增量 2 |
+| `api/` 知识库 CRUD + 权限（`/v1/kb`，`require_kb_access` 全接入） | ✅ 已实现（增量 2.2） |
+| `api/` 业务路由（chat/document/agent/task） | ⏳ 骨架占位，增量 2 |
 | `langgraph_service/` 编排图与节点 | ⏳ Checkpointer 已实现，图/节点增量 3 |
 | `ingest/` 摄入链路 | ⏳ 队列与状态机骨架，增量 4 |
 | 部署与可观测（K8s、OTel、Prometheus） | ⏳ 增量 5 |

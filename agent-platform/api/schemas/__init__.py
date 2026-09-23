@@ -10,17 +10,27 @@ from api.schemas.auth import (
     user_to_out,
 )
 from api.schemas.common import ErrorBody, ErrorResponse, HealthResponse, StoreHealth
+from api.schemas.kb import (
+    KnowledgeBaseCreate,
+    KnowledgeBaseOut,
+    KnowledgeBaseUpdate,
+    kb_to_out,
+)
 
 __all__ = [
     "ApiKeyRotateResult",
     "ErrorBody",
     "ErrorResponse",
     "HealthResponse",
+    "KnowledgeBaseCreate",
+    "KnowledgeBaseOut",
+    "KnowledgeBaseUpdate",
     "StoreHealth",
     "TokenRequest",
     "TokenResponse",
     "UserCreate",
     "UserCreateResult",
     "UserOut",
+    "kb_to_out",
     "user_to_out",
 ]

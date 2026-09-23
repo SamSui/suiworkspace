@@ -28,7 +28,7 @@
 | # | 子任务 | 产出 | 依赖 | 验收 |
 |---|---|---|---|---|
 | ✅ 2.1 | 用户与鉴权体系 | JWT 签发/校验、`user` CRUD、api_key 哈希轮换 | 增量 1 存储层 | 无 token→401；过期→401；合法→放行 |
-| 2.2 | 知识库 CRUD + 权限 | `/v1/kb` 全套；`require_kb_access` 接入**所有**读写路径 | 2.1 | 越权访问他人 kb → 404（不泄漏存在性） |
+| ✅ 2.2 | 知识库 CRUD + 权限 | `/v1/kb` 全套；`require_kb_access` 接入**所有**读写路径 | 2.1 | 越权访问他人 kb → 404（不泄漏存在性） |
 | 2.3 | 对话接口 | `/v1/chat`、`/v1/chat/stream`(SSE)、`/v1/chat/resume` | 2.1、增量 3 契约 | SSE 逐字透传不缓冲；`trace_id` 贯穿 |
 | 2.4 | 文档上传接口 | `/v1/doc` 上传→校验→落盘→`document(status=0)`→入队，返回 202 | 2.2 | 类型/大小白名单生效；请求内不解析 |
 | 2.5 | 任务查询 + Agent 配置 | `/v1/task/{id}`、`/v1/agent` CRUD | 2.2 | 状态与 `document.status` 一致 |
@@ -54,6 +54,23 @@
 - **鉴权准入**：`AuthMiddleware` 放行合法 token 并注入 `scope.state.user_id`；无/过期/串改 token → 401。
 - 权限粘连（`es_chunk_ref`、`require_kb_access`）按裁决**不在本子任务接入**，2.2 收口。
 - 验收口径（无 token→401、过期→401、合法→放行）已用单测 `tests/test_auth.py`、`tests/test_security.py` 与冒烟门禁 5 覆盖。
+
+### 2.2（已交付）知识库 CRUD + 权限
+
+新增路由（`get/update/delete` 全部经 `kb_access` 依赖注入归属校验）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/v1/kb` | 需认证 | 列出**当前用户**的库（owner_id + status 过滤） |
+| POST | `/v1/kb` | 需认证 | 创建自己名下新库（owner=当前用户） |
+| GET | `/v1/kb/{id}` | `require_kb_access` | 越权/不存在 → 404 |
+| PATCH | `/v1/kb/{id}` | `require_kb_access` | 改名；越权/不存在 → 404 |
+| DELETE | `/v1/kb/{id}` | `require_kb_access` | 软删（status=0）；越权/不存在 → 404 |
+
+契约要点：
+- **`kb_access` 依赖（`api/deps.py`）**：把路径参数 `kb_id` 绑定进 `require_kb_access`，路由直接 `Depends(kb_access)` 拿已过归属校验的 KB；校验失败与不存在统一 `NotFound(404)`，**不泄漏存在性**（裁决 #4）。
+- **软删**：`DELETE` 置 `status=0`，与 `require_kb_access` 的 `status != 1 → 404` 语义一致，被删库对任何路径即刻不可见。
+- 验收口径（越权访问他人 kb → 404）已用单测 `tests/test_kb_integration.py` 与冒烟门禁 6 覆盖。
 
 ---
 

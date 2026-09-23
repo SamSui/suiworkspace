@@ -1,4 +1,4 @@
-"""冒烟门禁脚本（增量 2 前置 / 增量 2.1 扩展）。
+"""冒烟门禁脚本（增量 2 前置 / 增量 2.1 / 2.2 扩展）。
 
 架构裁决《SUIG-10 增量1》第四节四项：
   1. compose 六服务 healthy          —— 另用 `docker compose ps` 验证
@@ -8,6 +8,9 @@
 
 增量 2.1 新增门禁 5（用户与鉴权闭环）：
   5. 注册 → api_key 换 JWT → 无/过期/合法 token 三件套（401/401/200）
+
+增量 2.2 新增门禁 6（知识库 CRUD + 权限闭环）：
+  6. owner 全生命周期 + 越权访问他人 kb → 404 + 无 token → 401
 
 运行：
     .\.venv\Scripts\python.exe scripts/smoke.py
@@ -186,6 +189,83 @@ async def gate_auth() -> bool:
         return False
 
 
+async def gate_kb() -> bool:
+    """门禁 6（增量 2.2）：知识库 CRUD + 权限闭环。
+
+    覆盖验收口径：owner 全生命周期（create/get/update/delete/list）；
+    **越权访问他人 kb → 404（不泄漏存在性）**；无 token → 401。依赖 live MySQL。
+    """
+    print("\n=== [门禁 6] 知识库 CRUD + 权限闭环 ===")
+    try:
+        import time
+
+        from fastapi.testclient import TestClient
+
+        from api.main import create_app
+    except Exception as exc:  # noqa: BLE001
+        print(f"IMPORT FAIL: {exc!r}")
+        return False
+
+    def register_and_token(cl: TestClient, name: str) -> str:
+        r = cl.post("/v1/users", json={"name": name})
+        assert r.status_code == 201, r.text
+        k = r.json()["api_key"]
+        tok = cl.post("/v1/auth/token", json={"name": name, "api_key": k})
+        assert tok.status_code == 200, tok.text
+        return tok.json()["access_token"]
+
+    def auth(tok: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {tok}"}
+
+    try:
+        ts = int(time.time())
+        app = create_app()
+        with TestClient(app) as client:
+            ta = register_and_token(client, f"smoke_kb_owner_{ts}")
+            tb = register_and_token(client, f"smoke_kb_intruder_{ts}")
+
+            created = client.post("/v1/kb", json={"name": "smoke-kb"}, headers=auth(ta))
+            if created.status_code != 201:
+                print(f"create kb -> {created.status_code} {created.text}")
+                return False
+            kb_id = created.json()["id"]
+            print(f"create kb -> 201 (id={kb_id})")
+
+            # owner 可读/可改
+            got = client.get(f"/v1/kb/{kb_id}", headers=auth(ta))
+            ok_read = got.status_code == 200 and got.json()["name"] == "smoke-kb"
+            upd = client.patch(f"/v1/kb/{kb_id}", json={"name": "renamed"}, headers=auth(ta))
+            ok_upd = upd.status_code == 200 and upd.json()["name"] == "renamed"
+            print(f"owner get -> {got.status_code} / patch -> {upd.status_code} {'OK' if ok_read and ok_upd else 'FAIL'}")
+
+            # 越权访问他人 kb -> 404（GET/PATCH/DELETE 三路）
+            deny_ok = True
+            for method, body in [("get", None), ("patch", {"name": "hijack"}), ("delete", None)]:
+                r = client.request(method.upper(), f"/v1/kb/{kb_id}", headers=auth(tb), json=body)
+                if r.status_code != 404:
+                    deny_ok = False
+                    print(f"intruder {method} -> {r.status_code} (expect 404) FAIL")
+                    break
+            print(f"intruder get/patch/delete -> 404 {'OK' if deny_ok else 'FAIL'}")
+
+            # 无 token -> 401
+            no_tok = client.get("/v1/kb")
+            ok_401 = no_tok.status_code == 401
+            print(f"no token /v1/kb -> {no_tok.status_code} (expect 401) {'OK' if ok_401 else 'FAIL'}")
+
+            # owner 软删后不可见
+            dele = client.delete(f"/v1/kb/{kb_id}", headers=auth(ta))
+            ok_del = dele.status_code == 204
+            after = client.get(f"/v1/kb/{kb_id}", headers=auth(ta)).status_code
+            ok_hidden = after == 404
+            print(f"delete -> {dele.status_code} / get-after -> {after} {'OK' if ok_del and ok_hidden else 'FAIL'}")
+
+        return bool(ok_read and ok_upd and deny_ok and ok_401 and ok_del and ok_hidden)
+    except Exception as exc:  # noqa: BLE001
+        print(f"kb gate FAIL: {exc!r}")
+        return False
+
+
 async def main() -> int:
     setup_logging("INFO", json_output=False)
     settings = get_settings()
@@ -199,14 +279,16 @@ async def main() -> int:
     g3 = await gate_app()
     g4 = await gate_checkpointer()
     g5 = await gate_auth()
+    g6 = await gate_kb()
 
     print("\n===== 门禁汇总 =====")
     print(f"门禁 2  四类存储 connect+health  {'PASS' if g2 else 'FAIL'}")
     print(f"门禁 3  FastAPI+OpenAPI+healthz    {'PASS' if g3 else 'FAIL'}")
     print(f"门禁 4.2 AsyncRedisSaver asetup     {'PASS' if g4 else 'FAIL'}")
     print(f"门禁 5  用户与鉴权闭环              {'PASS' if g5 else 'FAIL'}")
+    print(f"门禁 6  知识库 CRUD + 权限          {'PASS' if g6 else 'FAIL'}")
 
-    all_ok = g2 and g3 and g4 and g5
+    all_ok = g2 and g3 and g4 and g5 and g6
     print(f"\nOVERALL: {'PASS' if all_ok else 'FAIL'}")
     return 0 if all_ok else 1
 

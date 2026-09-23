@@ -76,6 +76,21 @@ async def require_kb_access(
     return kb
 
 
+async def kb_access(
+    kb_id: int,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> KnowledgeBase:
+    """FastAPI 依赖形态的 `require_kb_access`：把路径参数 `kb_id` 绑定进来。
+
+    需要读写某个知识库的路由，直接用 `Depends(kb_access)` 即可拿到已通过归属校验的 KB。
+    校验失败与不存在统一抛 `NotFound(404)`（不泄漏存在性，裁决 #4）。
+    注：`current_user` 与这里的 `get_session` 是同一 callable，FastAPI 按依赖去重，
+    两者共享同一会话实例。
+    """
+    return await require_kb_access(kb_id, user, session)
+
+
 CurrentUser = Annotated[User, Depends(current_user)]
 DBSession = Annotated[AsyncSession, Depends(get_session)]
 Container = Annotated[StorageContainer, Depends(get_container)]
@@ -89,5 +104,6 @@ __all__ = [
     "get_container",
     "get_session",
     "get_user_id",
+    "kb_access",
     "require_kb_access",
 ]
