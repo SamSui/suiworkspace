@@ -29,7 +29,7 @@
 |---|---|---|---|---|
 | ✅ 2.1 | 用户与鉴权体系 | JWT 签发/校验、`user` CRUD、api_key 哈希轮换 | 增量 1 存储层 | 无 token→401；过期→401；合法→放行 |
 | ✅ 2.2 | 知识库 CRUD + 权限 | `/v1/kb` 全套；`require_kb_access` 接入**所有**读写路径 | 2.1 | 越权访问他人 kb → 404（不泄漏存在性） |
-| 2.3 | 对话接口 | `/v1/chat`、`/v1/chat/stream`(SSE)、`/v1/chat/resume` | 2.1、增量 3 契约 | SSE 逐字透传不缓冲；`trace_id` 贯穿 |
+| ✅ 2.3 | 对话接口 | `/v1/chat`、`/v1/chat/stream`(SSE)、`/v1/chat/resume` | 2.1、增量 3 契约 | SSE 逐字透传不缓冲；`trace_id` 贯穿 |
 | 2.4 | 文档上传接口 | `/v1/doc` 上传→校验→落盘→`document(status=0)`→入队，返回 202 | 2.2 | 类型/大小白名单生效；请求内不解析 |
 | 2.5 | 任务查询 + Agent 配置 | `/v1/task/{id}`、`/v1/agent` CRUD | 2.2 | 状态与 `document.status` 一致 |
 | 2.6 | 网关单测 + 接口文档 | pytest 覆盖鉴权/限流/权限/上传校验；OpenAPI 契约 | 2.1–2.5 | 覆盖率 ≥80%；契约过架构复核 |
@@ -71,6 +71,24 @@
 - **`kb_access` 依赖（`api/deps.py`）**：把路径参数 `kb_id` 绑定进 `require_kb_access`，路由直接 `Depends(kb_access)` 拿已过归属校验的 KB；校验失败与不存在统一 `NotFound(404)`，**不泄漏存在性**（裁决 #4）。
 - **软删**：`DELETE` 置 `status=0`，与 `require_kb_access` 的 `status != 1 → 404` 语义一致，被删库对任何路径即刻不可见。
 - 验收口径（越权访问他人 kb → 404）已用单测 `tests/test_kb_integration.py` 与冒烟门禁 6 覆盖。
+
+### 2.3（已交付）对话接口 SSE
+
+网关侧**接口骨架 + 契约实现**，只做透传 / 编排调用，不接检索 / LLM / 存储业务（裁决 #1）。编排的实际检索/生成节点属增量 3，此处以符合冻结契约的 SSE stub 对接。
+
+路由（均走既有 JWT 鉴权中间件；无 token → 401）：
+
+| 方法 | 路径 | 行为 | 鉴权 |
+|---|---|---|---|
+| POST | `/v1/chat` | 非流式：订阅编排流、读到 `done` 事件后返回 `{thread_id, message_id, usage}` | 需认证 |
+| POST | `/v1/chat/stream` | SSE **逐字节透传**编排流，不缓冲 | 需认证 |
+| POST | `/v1/chat/resume` | 以 thread_id 续访挂起的图；无该会话/无权 → 404 | 需认证 |
+
+契约要点：
+- **SSE 透传**（`api/upstream.py`）：`chat_stream` 对下游编排响应体**按字节转发**（迭代器逐 chunk yield 给 `StreamingResponse`），不重组、不解析、不攒包；心跳 `: ping`、`event`/`data`/`seq`、`error` 的 `code`+`trace_id` 均原样到达前端。中间件保持纯 ASGI（未退 `BaseHTTPMiddleware`），对 SSE 长流不缓冲。
+- **非流式收敛**（`chat_once`）：订阅编排流、逐事件解析，读到 `done` 摘 `message_id`+`usage` 返回（与 MySQL `message` 行对齐，token_count 落库有源）；编排 `error` 事件 → 502，`code`+`trace_id` 落响应 body（契约第 2 条）。
+- **resume 归属校验**（`api/deps.py::require_thread_access`）：以 thread_id 查 `Conversation` 的归属，无该会话/非当前用户所有/已停用 → 统一 `NotFound(404)`（同 `require_kb_access` 的越权语义，不泄漏存在性）。用显式函数调用而非 FastAPI 依赖，避开与 body 字段冲突。
+- 验收口径（三类）已用单测 `tests/test_chat.py` 覆盖（9 项，全部 PASS），下游用 `tests/sse_stub.py` 的契约 SSE stub + `api.upstream.set_client_factory` 注入，全程不依赖真实网络。
 
 ---
 

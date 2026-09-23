@@ -9,6 +9,7 @@ from api.schemas.auth import (
     UserOut,
     user_to_out,
 )
+from api.schemas.chat import ChatRequest, ChatStartResponse, ChatStreamRequest, ResumeRequest
 from api.schemas.common import ErrorBody, ErrorResponse, HealthResponse, StoreHealth
 from api.schemas.kb import (
     KnowledgeBaseCreate,
@@ -19,12 +20,16 @@ from api.schemas.kb import (
 
 __all__ = [
     "ApiKeyRotateResult",
+    "ChatRequest",
+    "ChatStartResponse",
+    "ChatStreamRequest",
     "ErrorBody",
     "ErrorResponse",
     "HealthResponse",
     "KnowledgeBaseCreate",
     "KnowledgeBaseOut",
     "KnowledgeBaseUpdate",
+    "ResumeRequest",
     "StoreHealth",
     "TokenRequest",
     "TokenResponse",

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AuthenticationError, NotFound
 from core.logging import get_logger
 from core.storage import StorageContainer
-from db.models import KnowledgeBase, User
+from db.models import Conversation, KnowledgeBase, User
 
 logger = get_logger(__name__)
 
@@ -96,6 +96,30 @@ DBSession = Annotated[AsyncSession, Depends(get_session)]
 Container = Annotated[StorageContainer, Depends(get_container)]
 
 
+async def require_thread_access(
+    thread_id: str, user: User, session: AsyncSession
+) -> Conversation:
+    """以 thread_id 取「当前用户拥有」的会话，供续接类路由做归属校验。
+
+    只做归属校验（不接检索 / 生成逻辑）：该线程不存在、非当前用户所有或已停用，
+    统一抛 `NotFound(404)`——与知识库越权同语义，不泄漏他人 thread 是否存在。
+    由路由显式调用（普通函数，不带 FastAPI 依赖，避免与原 body 的 thread_id 冲突）。
+
+    Returns:
+        Conversation：已确认归属的会话行。
+    """
+    stmt = select(Conversation).where(Conversation.thread_id == thread_id)
+    conv = (await session.execute(stmt)).scalar_one_or_none()
+
+    if conv is None or conv.status != "active" or conv.user_id != int(user.id):
+        logger.info(
+            "thread access denied",
+            extra={"extra_fields": {"thread_id": thread_id, "user_id": user.id}},
+        )
+        raise NotFound("会话不存在")
+    return conv
+
+
 __all__ = [
     "Container",
     "CurrentUser",
@@ -106,4 +130,5 @@ __all__ = [
     "get_user_id",
     "kb_access",
     "require_kb_access",
+    "require_thread_access",
 ]
