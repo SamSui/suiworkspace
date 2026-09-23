@@ -21,7 +21,7 @@ from api.middlewares import (
     TraceMiddleware,
     register_exception_handlers,
 )
-from api.routers import agent, chat, document, health, knowledge, task
+from api.routers import agent, auth, chat, document, health, knowledge, task, users
 from core.config import get_settings
 from core.logging import get_logger, setup_logging
 from core.storage import StorageContainer
@@ -68,6 +68,8 @@ def create_app() -> FastAPI:
     app.add_middleware(TraceMiddleware)
 
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(users.router)
     app.include_router(chat.router)
     app.include_router(knowledge.router)
     app.include_router(document.router)

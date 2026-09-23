@@ -41,7 +41,8 @@ class AuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if scope["type"] == "http" and is_public(path):
+        method = scope.get("method", "GET")
+        if scope["type"] == "http" and is_public(path, method):
             await self.app(scope, receive, send)
             return
 

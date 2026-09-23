@@ -27,7 +27,7 @@
 
 | # | 子任务 | 产出 | 依赖 | 验收 |
 |---|---|---|---|---|
-| 2.1 | 用户与鉴权体系 | JWT 签发/校验、`user` CRUD、api_key 哈希轮换 | 增量 1 存储层 | 无 token→401；过期→401；合法→放行 |
+| ✅ 2.1 | 用户与鉴权体系 | JWT 签发/校验、`user` CRUD、api_key 哈希轮换 | 增量 1 存储层 | 无 token→401；过期→401；合法→放行 |
 | 2.2 | 知识库 CRUD + 权限 | `/v1/kb` 全套；`require_kb_access` 接入**所有**读写路径 | 2.1 | 越权访问他人 kb → 404（不泄漏存在性） |
 | 2.3 | 对话接口 | `/v1/chat`、`/v1/chat/stream`(SSE)、`/v1/chat/resume` | 2.1、增量 3 契约 | SSE 逐字透传不缓冲；`trace_id` 贯穿 |
 | 2.4 | 文档上传接口 | `/v1/doc` 上传→校验→落盘→`document(status=0)`→入队，返回 202 | 2.2 | 类型/大小白名单生效；请求内不解析 |
@@ -35,6 +35,25 @@
 | 2.6 | 网关单测 + 接口文档 | pytest 覆盖鉴权/限流/权限/上传校验；OpenAPI 契约 | 2.1–2.5 | 覆盖率 ≥80%；契约过架构复核 |
 
 **风险**：2.3 与增量 3 的 SSE 契约需先冻结（`POST /v1/stream` 的事件格式），否则两侧返工。
+
+### 2.1（已交付）用户与鉴权体系
+
+新增路由（均已接入鉴权中间件）：
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| POST | `/v1/users` | 公开 | 注册（引导首个用户），`api_key` 明文仅回显一次 |
+| POST | `/v1/auth/token` | 公开 | `name` + `api_key` → JWT（`exp` 内置） |
+| GET | `/v1/users/me` | 需认证 | 当前用户资料 |
+| GET | `/v1/users/{id}` | 需认证 | 按 id 取用户 |
+| POST | `/v1/users/me/api-key/rotate` | 需认证 | 轮换 api_key（旧 key 即刻失效） |
+
+契约要点：
+- **JWT**：`pyjwt`（已是主依赖），`sub`=user_id，`exp`=签发时刻+`JWT_EXPIRE_MINUTES`。
+- **api_key**：只存 `sha256` 哈希（`core/security.py`），明文仅创建/轮换成功回显一次；轮换=整行替换哈希。
+- **鉴权准入**：`AuthMiddleware` 放行合法 token 并注入 `scope.state.user_id`；无/过期/串改 token → 401。
+- 权限粘连（`es_chunk_ref`、`require_kb_access`）按裁决**不在本子任务接入**，2.2 收口。
+- 验收口径（无 token→401、过期→401、合法→放行）已用单测 `tests/test_auth.py`、`tests/test_security.py` 与冒烟门禁 5 覆盖。
 
 ---
 

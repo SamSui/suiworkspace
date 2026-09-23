@@ -1,10 +1,13 @@
-"""冒烟门禁脚本（增量 2 前置）。
+"""冒烟门禁脚本（增量 2 前置 / 增量 2.1 扩展）。
 
-对应架构裁决《SUIG-10 增量1》第四节四项：
+架构裁决《SUIG-10 增量1》第四节四项：
   1. compose 六服务 healthy          —— 另用 `docker compose ps` 验证
   2. 四类存储 connect() + health()    ——本就 low 即 /healthz
   3. FastAPI 启动 + OpenAPI + /healthz 200
   4. AsyncRedisSaver 构造 + asetup() 实跑（含真实写入 roundtrip）
+
+增量 2.1 新增门禁 5（用户与鉴权闭环）：
+  5. 注册 → api_key 换 JWT → 无/过期/合法 token 三件套（401/401/200）
 
 运行：
     .\.venv\Scripts\python.exe scripts/smoke.py
@@ -105,6 +108,84 @@ async def gate_checkpointer() -> bool:
         return False
 
 
+async def gate_auth() -> bool:
+    """门禁 5（增量 2.1）：用户与鉴权最小闭环。
+
+    覆盖架构验收口径：注册 → 换 JWT → 合法放行；无 token / 过期 token → 401。
+    依赖 `pyjwt`（已是主依赖）+ 标准库，不引入新第三方契约。依赖 live MySQL（引导用户）。
+    """
+    print("\n=== [门禁 5] 用户与鉴权闭环 ===")
+    try:
+        import time
+
+        from fastapi.testclient import TestClient
+
+        from api.main import create_app
+    except Exception as exc:  # noqa: BLE001
+        print(f"IMPORT FAIL: {exc!r}")
+        return False
+
+    try:
+        app = create_app()
+        name = f"smoke_user_{int(time.time())}"
+        with TestClient(app) as client:
+            # 1) 注册 -> 拿 api_key（明文仅此一次）
+            r = client.post("/v1/users", json={"name": name})
+            if r.status_code != 201:
+                print(f"register -> {r.status_code} {r.text}")
+                return False
+            api_key = r.json()["api_key"]
+            print(f"register -> 201 (user_id={r.json()['user']['id']}, api_key issued)")
+
+            # 2) api_key 换 JWT
+            r = client.post("/v1/auth/token", json={"name": name, "api_key": api_key})
+            if r.status_code != 200:
+                print(f"auth/token -> {r.status_code} {r.text}")
+                return False
+            token = r.json()["access_token"]
+            print(f"auth/token -> 200 (token_type={r.json()['token_type']})")
+
+            # 3) 无 token -> 401
+            no_tok = client.get("/v1/users/me")
+            ok_no = no_tok.status_code == 401
+            print(
+                f"no token /v1/users/me -> {no_tok.status_code} (expect 401) "
+                f"{'OK' if ok_no else 'FAIL'}"
+            )
+
+            # 4) 过期 token -> 401
+            from datetime import datetime, timedelta, timezone
+
+            import jwt
+
+            settings = get_settings()
+            exp = jwt.encode(
+                {
+                    "sub": str(r.json()["user"]["id"]),
+                    "iat": datetime.now(timezone.utc) - timedelta(hours=1),
+                    "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+                },
+                settings.app.jwt_secret,
+                algorithm=settings.app.jwt_algorithm,
+            )
+            rr_exp = client.get("/v1/users/me", headers={"Authorization": f"Bearer {exp}"})
+            ok_exp = rr_exp.status_code == 401
+            print(
+                f"expired token -> {rr_exp.status_code} (expect 401) "
+                f"{'OK' if ok_exp else 'FAIL'}"
+            )
+
+            # 5) 合法 token 放行
+            rr_ok = client.get("/v1/users/me", headers={"Authorization": f"Bearer {token}"})
+            ok_valid = rr_ok.status_code == 200 and rr_ok.json()["name"] == name
+            print(f"valid token -> {rr_ok.status_code} {'OK' if ok_valid else 'FAIL'}")
+
+        return bool(ok_no and ok_exp and ok_valid)
+    except Exception as exc:  # noqa: BLE001
+        print(f"auth gate FAIL: {exc!r}")
+        return False
+
+
 async def main() -> int:
     setup_logging("INFO", json_output=False)
     settings = get_settings()
@@ -117,13 +198,15 @@ async def main() -> int:
     g2 = await gate_storage(container)
     g3 = await gate_app()
     g4 = await gate_checkpointer()
+    g5 = await gate_auth()
 
     print("\n===== 门禁汇总 =====")
     print(f"门禁 2  四类存储 connect+health  {'PASS' if g2 else 'FAIL'}")
     print(f"门禁 3  FastAPI+OpenAPI+healthz    {'PASS' if g3 else 'FAIL'}")
     print(f"门禁 4.2 AsyncRedisSaver asetup     {'PASS' if g4 else 'FAIL'}")
+    print(f"门禁 5  用户与鉴权闭环              {'PASS' if g5 else 'FAIL'}")
 
-    all_ok = g2 and g3 and g4
+    all_ok = g2 and g3 and g4 and g5
     print(f"\nOVERALL: {'PASS' if all_ok else 'FAIL'}")
     return 0 if all_ok else 1
 
