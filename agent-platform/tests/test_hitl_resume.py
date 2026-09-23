@@ -1,7 +1,8 @@
 """3.6 HITL 挂起/恢复单测（图级）。
 
-用真实 checkpointer（先 InMemory，保证逻辑正确；Redis 真跑见 `test_checkpointer_multiprocess.py`
-与 scripts/pressure_dual.py 的进程级验证）。验收：挂起 → 恢复后可续跑（generate 产出）。
+用真实 checkpointer（InMemory 保证图级逻辑正确；跨进程同 thread_id 见
+`test_checkpointer_multiprocess.py`；进程级重启/双副本真跑见 `scripts/verify_increment3.py`）。
+验收：挂起 → 恢复后可续跑（generate 产出）。
 """
 
 from __future__ import annotations
