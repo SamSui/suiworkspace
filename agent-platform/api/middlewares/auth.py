@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import jwt
 from starlette.datastructures import Headers
 
 from api.middlewares.common import is_public, send_json
 from core.config import Settings
+from core.exceptions import AuthenticationError
 from core.logging import get_logger
+from core.security import verify_access_token
 
 logger = get_logger(__name__)
 
@@ -25,13 +26,10 @@ class AuthMiddleware:
         self.settings = settings
 
     def _decode(self, token: str) -> dict[str, Any] | None:
+        # 校验统一走 core.security.verify_access_token——认证逻辑只此一份。
         try:
-            return jwt.decode(
-                token,
-                self.settings.app.jwt_secret,
-                algorithms=[self.settings.app.jwt_algorithm],
-            )
-        except jwt.PyJWTError as exc:
+            return verify_access_token(token, self.settings.app)
+        except AuthenticationError as exc:
             logger.info("jwt rejected", extra={"extra_fields": {"reason": str(exc)}})
             return None
 

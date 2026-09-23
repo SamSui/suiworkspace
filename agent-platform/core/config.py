@@ -42,6 +42,8 @@ class AppSettings(_Section):
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 120
+    # api_key HMAC-校验密钥：与 jwt_secret 分离，避免一把密钥既签 JWT 又签 api_key
+    api_key_secret: str = "change-me-in-production-api-key"
 
     @property
     def is_prod(self) -> bool:
@@ -159,9 +161,11 @@ class Settings(_Section):
     @field_validator("app")
     @classmethod
     def _guard_prod_secret(cls, value: AppSettings) -> AppSettings:
-        """生产环境不允许沿用示例 JWT 密钥——启动即失败，而不是带着弱密钥上线。"""
+        """生产环境不允许沿用示例 JWT/API-Key 密钥——启动即失败，而不是带着弱密钥上线。"""
         if value.is_prod and value.jwt_secret == "change-me-in-production":
             raise ValueError("APP_ENV=prod 时必须显式设置 JWT_SECRET")
+        if value.is_prod and value.api_key_secret == "change-me-in-production-api-key":
+            raise ValueError("APP_ENV=prod 时必须显式设置 API_KEY_SECRET")
         return value
 
 
