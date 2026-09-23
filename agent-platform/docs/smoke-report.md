@@ -1,17 +1,31 @@
 # 增量 2 门禁 · 运行时冒烟报告
 
 > 执行：随研发 ｜ 日期：2026-09-23 ｜ 对应门禁：架构裁决《SUIG-10 增量1 验收裁决》第四节
+> 更新：授权后（Python 3.12 建 venv + 装依赖）门禁 2/3/4 全部实跑通过。
 
-## 0. 结论
+## 0. 最终结论
 
 | 门禁项 | 状态 | 说明 |
 |---|---|---|
-| 1. compose 六服务全部 healthy | ✅ **通过** | 六服务实测 healthy，且逐项做了功能性验证（非只看 healthy 灯） |
-| 2. 四类存储客户端 `connect` + `health()` 实跑 | ⛔ **阻塞** | 需安装 Python 依赖（授权待批） |
-| 3. FastAPI 实跑启动 + OpenAPI 可访问 | ⛔ **阻塞** | 同上 |
-| 4. `AsyncRedisSaver` 构造 + `asetup()` 实跑 | ⛔ **阻塞** | 同上 |
+| 1. compose 六服务全部 healthy | ✅ **通过** | 六服务实测 healthy，且逐项做了功能性验证 |
+| 2. 四类存储客户端 `connect` + `health()` 实跑 | ✅ **通过** | `/healthz` 返回 200，四类全 ok |
+| 3. FastAPI 实跑启动 + OpenAPI 可访问 | ✅ **通过** | openapi.json 200，12 条路由齐全 |
+| 4. `AsyncRedisSaver` 构造 + `asetup()` 实跑 | ✅ **通过** | `asetup() OK` + redis roundtrip |
 
-**冒烟本身就抓到了 2 个真实缺陷**（只有真跑才会暴露）——见第 3 节。
+**冒烟共抓到 6 处运行期缺陷**（"编译通过 ≠ 跑得起来"的直接证据），全部已修。
+
+## 补充(授权后第二轮)：Python 依赖相关修复
+
+冒烟在其正跑通前暴露了 6 处仅运行期可见的问题，已全部修复并复验通过：
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| 3.1 | MinIO 旧 pin 已下架 | pin 到实测 `RELEASE.2024-01-05T22-17-24Z` |
+| 3.2 | MinIO healthcheck 用不存在 curl | 改用内置 `mc ready local`；并修废弃 env |
+| 3.3 | `python-multipart` 缺失 | 移入 pyproject 主依赖 |
+| 3.4 | FastAPI 拒绝 `_` 前缀参数 | 5 个占位路由修名 |
+| 3.5 | ES SDK 9.x 不兼容服务端 8.13 | pin `<9`（8.x SDK 发 compatible-with=8） |
+| 3.6 | RedisSaver 需 RediSearch | compose 改 `redis/redis-stack-server` |
 
 ---
 
