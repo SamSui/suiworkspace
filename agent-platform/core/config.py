@@ -140,6 +140,9 @@ class IngestSettings(_Section):
     chunk_overlap: int = 100
     max_document_mb: int = 200
     allowed_extensions: str = ".pdf,.docx,.md,.txt"
+    # 上传文件落盘目录（相对项目根）。仅按服务端生成的 hash(sha256) 分桶，
+    # 绝不用客户端文件名拼路径——防路径穿越。增量 5 换对象存储时替换此处。
+    upload_dir: str = "storage/uploads"
 
     @property
     def allowed_ext_set(self) -> set[str]:
