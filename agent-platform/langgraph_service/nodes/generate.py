@@ -17,7 +17,6 @@ from langgraph.types import RunnableConfig
 from core.logging import get_logger
 from langgraph_service.graph.state import AgentState
 from langgraph_service.retrieval import text_hydrate
-from langgraph_service.sse import SSEEncoder
 
 logger = get_logger(__name__)
 
@@ -47,8 +46,7 @@ async def generate_node(
     deps = (config or {}).get("configurable", {}).get("deps") or {}
     llm_client = deps.get("llm_client")
     container = deps.get("container")
-    emit = deps.get("emit")  # callable(frame: str) -> None; None = 非流式（收敛）
-    enc = SSEEncoder()
+    emit = deps.get("emit")  # callable(dict) -> None; None = 非流式（收敛）
 
     query = state.get("query", "")
     retrieved = state.get("retrieved") or []
@@ -80,7 +78,7 @@ async def generate_node(
     async for token in llm_client.stream(messages, metadata={"query": query}):
         pieces.append(token)
         if emit is not None:
-            emit(enc.token(token))
+            emit({"text": token})
 
     answer = "".join(pieces)
     usage = {"completion": len(answer), "prompt": len(_build_user_prompt(query, chunk_texts))}

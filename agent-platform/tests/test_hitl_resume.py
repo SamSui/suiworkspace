@@ -6,13 +6,10 @@
 
 from __future__ import annotations
 
-import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from langgraph_service.graph.rag_graph import build_rag_graph
-from langgraph_service.llm.providers import EchoProvider
-from langgraph_service.metrics import reset as metrics_reset
 
 
 class _LLM:

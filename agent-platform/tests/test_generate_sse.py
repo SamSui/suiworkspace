@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from langgraph_service.sse import SSEEncoder
 
 
@@ -73,8 +71,22 @@ async def test_generate_citations_link_to_chunk_id():
         last_provider = "echo"
 
     retrieved = [
-        {"chunk_id": "ck-1", "doc_id": "d1", "kb_id": "k1", "score": 0.8, "source": "vector", "highlight": "报销规则"},
-        {"chunk_id": "ck-2", "doc_id": "d1", "kb_id": "k1", "score": 0.5, "source": "keyword", "highlight": "流程"},
+        {
+            "chunk_id": "ck-1",
+            "doc_id": "d1",
+            "kb_id": "k1",
+            "score": 0.8,
+            "source": "vector",
+            "highlight": "报销规则",
+        },
+        {
+            "chunk_id": "ck-2",
+            "doc_id": "d1",
+            "kb_id": "k1",
+            "score": 0.5,
+            "source": "keyword",
+            "highlight": "流程",
+        },
     ]
 
     class _ES:

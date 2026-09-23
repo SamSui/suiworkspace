@@ -63,9 +63,8 @@ class OpenAICompatProvider(LLMProvider):
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(  # noqa: E501 — 四参同源，保持一行（新 httpx 要求四项都设）
-                connect=connect_timeout, read=read_timeout, write=connect_timeout, pool=connect_timeout
-            ),
+            timeout=httpx.Timeout(connect=connect_timeout, read=read_timeout,
+                                  write=connect_timeout, pool=connect_timeout),
             limits=httpx.Limits(max_keepalive_connections=8, max_connections=64),
         )
 

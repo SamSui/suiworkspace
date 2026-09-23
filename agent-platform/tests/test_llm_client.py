@@ -9,10 +9,9 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from core.config import LLMSettings
-from langgraph_service.llm.client import CircuitBreaker, LLMClient, LLMError
+from langgraph_service.llm.client import LLMClient, LLMError
 from langgraph_service.llm.providers import LLMProvider
 
 

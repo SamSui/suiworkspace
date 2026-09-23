@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from langgraph_service.nodes.router import _decisive_route, router_node
 
 

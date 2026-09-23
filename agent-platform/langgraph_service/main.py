@@ -41,18 +41,38 @@ logger = get_logger(__name__)
 
 _INCREMENT = "增量 3（langgraph 编排）"
 
+
+class RunRequest(BaseModel):
+    """`POST /v1/stream` 入参。模块级：FastAPI 需能解析为 body schema。"""
+
+    thread_id: str = Field(description="会话寻址键，与 conversation.thread_id 对应")
+    query: str = Field(min_length=1)
+    user_id: int
+    kb_id: int | None = None
+    hitl_required: bool = Field(
+        default=False, description="命中需人工审批场景则图在 generate 前挂起"
+    )
+
+
+class ResumeRequest(BaseModel):
+    """`POST /v1/resume` 入参。"""
+
+    thread_id: str
+    value: str
+    user_id: int | None = None
+
 # 编排侧不回写 MySQL；`message_id` 在线程内自增，便于网关/收录对齐 message 行。
 # Redis 可用时用 INCR（跨实例一致），否则退本地计数器。
 _local_seq = 0
 _local_seq_lock = Lock()
 
 
-def _next_message_id(container: StorageContainer | None, thread_id: str) -> int:
+async def _next_message_id(container: StorageContainer | None, thread_id: str) -> int:
     if container is not None:
         redis = container.redis
         if redis is not None:
             try:
-                return int(redis.client.incr(f"msgseq:{thread_id}"))
+                return int(await redis.client.incr(f"msgseq:{thread_id}"))
             except Exception:  # noqa: BLE001 — Redis 不可用时落本地计数器
                 pass
     global _local_seq  # noqa: PLW0603
@@ -127,20 +147,6 @@ def create_app() -> FastAPI:
         healthy = healthy and has_checkpointer
         return JSONResponse(status_code=200 if healthy else 503, content=summary)
 
-    class RunRequest(BaseModel):
-        thread_id: str = Field(description="会话寻址键，与 conversation.thread_id 对应")
-        query: str = Field(min_length=1)
-        user_id: int
-        kb_id: int | None = None
-        hitl_required: bool = Field(
-            default=False, description="命中需人工审批场景则图在 generate 前挂起"
-        )
-
-    class ResumeRequest(BaseModel):
-        thread_id: str
-        value: str
-        user_id: int | None = None
-
     @app.post("/v1/stream")
     async def stream(payload: RunRequest, request: Request) -> StreamingResponse:
         """SSE 流式执行图。网关侧只做透传，不缓冲。"""
@@ -153,12 +159,14 @@ def create_app() -> FastAPI:
 
         queue: asyncio.Queue[str] = asyncio.Queue()
         box: dict[str, Any] = {}
+        enc = SSEEncoder()  # 单一编码器：token 与 interrupt/done/error 共享同一 seq 序列
         cfg = thread_config(payload.thread_id)
         cfg["configurable"]["deps"] = {
             "container": container,
             "settings": settings,
             "llm_client": llm_client,
-            "emit": queue.put_nowait,
+            # 节点每吐一个 token 调一次；这里即时编码为 SSE 帧入队（与后续 done 同序列）
+            "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
         }
         state: dict[str, Any] = {
             "query": payload.query,
@@ -167,25 +175,19 @@ def create_app() -> FastAPI:
             "thread_id": payload.thread_id,
             "hitl_required": payload.hitl_required,
         }
-        run_task = asyncio.create_task(_run_graph(graph, state, cfg, box))
+        run_task = asyncio.create_task(_run_graph(graph, state, cfg, box, queue))
 
         async def _gen() -> AsyncIterator[str]:
-            enc = SSEEncoder()
             try:
                 while True:
-                    if not run_task.done():
-                        try:
-                            frame = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
-                        except asyncio.TimeoutError:
-                            yield enc.heartbeat()
-                            continue
-                    else:
-                        try:
-                            frame = queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
+                    try:
+                        frame = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+                    except asyncio.TimeoutError:
+                        # 无帧可发（图执行中空闲）→ 心跳保活，应对 LB 空闲掐断
+                        yield enc.heartbeat()
+                        continue
                     if frame is None:
-                        break
+                        break  # 哨兵：图已结束（见 _run_graph finally）
                     yield frame
                 # 图结束：error / interrupt / done
                 if box.get("error"):
@@ -200,7 +202,7 @@ def create_app() -> FastAPI:
                 else:
                     final = box.get("final") or {}
                     usage = final.get("usage") or {}
-                    mid = _next_message_id(container, payload.thread_id)
+                    mid = await _next_message_id(container, payload.thread_id)
                     yield enc.done(
                         message_id=mid, usage={str(k): int(v) for k, v in usage.items()}
                     )
@@ -224,34 +226,47 @@ def create_app() -> FastAPI:
             raise NotImplementedYet(_INCREMENT, "图未就绪")
         container: StorageContainer = request.app.state.container
         settings = get_settings()
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        box: dict[str, Any] = {}
+        enc = SSEEncoder()  # 与 token 共享同一 seq 序列
+        cfg = thread_config(payload.thread_id)
+        cfg["configurable"]["deps"] = {
+            "container": container,
+            "settings": settings,
+            "llm_client": request.app.state.llm_client,
+            "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
+        }
+        run_task = asyncio.create_task(_resume_graph(graph, cfg, payload.value, box, queue))
 
         async def _gen() -> AsyncIterator[str]:
-            enc = SSEEncoder()
-            cfg = thread_config(payload.thread_id)
-            cfg["configurable"]["deps"] = {
-                "container": container,
-                "settings": settings,
-                "llm_client": request.app.state.llm_client,
-                "emit": asyncio.Queue().put_nowait,  # resume 收敛产出，无需逐字流
-            }
-            final: dict[str, Any] = {}
             try:
-                async for chunk in graph.astream(
-                    Command(resume=payload.value), cfg, stream_mode="updates"
-                ):
-                    if "__interrupt__" in chunk:
-                        yield enc.interrupt()
-                        return
-                    for _node, update in chunk.items():
-                        if isinstance(update, dict):
-                            final.update(update)
-                usage = final.get("usage") or {}
-                mid = _next_message_id(container, payload.thread_id)
-                yield enc.done(
-                    message_id=mid, usage={str(k): int(v) for k, v in usage.items()}
-                )
+                while True:
+                    try:
+                        frame = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+                    except asyncio.TimeoutError:
+                        yield enc.heartbeat()
+                        continue
+                    if frame is None:
+                        break  # 哨兵：图已结束
+                    yield frame
+                if box.get("error"):
+                    yield enc.error(code="stream_error", message=str(box["error"]), trace_id="")
+                elif box.get("interrupt"):
+                    yield enc.interrupt()
+                else:
+                    usage = (box.get("final") or {}).get("usage") or {}
+                    mid = await _next_message_id(container, payload.thread_id)
+                    yield enc.done(
+                        message_id=mid, usage={str(k): int(v) for k, v in usage.items()}
+                    )
+            except asyncio.CancelledError:  # 客户端断开
+                run_task.cancel()
+                raise
             except Exception as exc:  # noqa: BLE001
-                yield enc.error(code="stream_error", message=str(exc), trace_id="")
+                try:
+                    yield enc.error(code="stream_error", message=str(exc), trace_id="")
+                except Exception:  # noqa: BLE001
+                    pass
 
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
@@ -271,9 +286,17 @@ def create_app() -> FastAPI:
 
 
 async def _run_graph(
-    graph: Any, state: dict[str, Any], cfg: dict[str, Any], box: dict[str, Any]
+    graph: Any,
+    state: dict[str, Any],
+    cfg: dict[str, Any],
+    box: dict[str, Any],
+    queue: asyncio.Queue[str],
 ) -> None:
-    """后台执行图：收集 interrupt / final / error。"""
+    """后台执行图：收集 interrupt / final / error，并投哨兵通知 _gen 结束。
+
+    哨兵 `None` 让 _gen 立即退出而非阻塞到下一个心跳超时——否则每次请求尾部
+    会凭空多出 HEARTBEAT_INTERVAL 的延迟（压测 P99 直接打满该值）。
+    """
     try:
         final: dict[str, Any] = {}
         async for chunk in graph.astream(state, cfg, stream_mode="updates"):
@@ -286,6 +309,26 @@ async def _run_graph(
         box["final"] = final
     except Exception as exc:  # noqa: BLE001
         box["error"] = exc
+    finally:
+        queue.put_nowait(None)  # 哨兵：图已结束
+
+
+async def _resume_graph(
+    graph: Any, cfg: dict[str, Any], value: str, box: dict[str, Any], queue: asyncio.Queue[str]
+) -> None:
+    """后台续跑挂起的图（HITL 恢复）。与 `_run_graph` 同样的哨兵收尾语义。"""
+    try:
+        async for chunk in graph.astream(Command(resume=value), cfg, stream_mode="updates"):
+            if "__interrupt__" in chunk:
+                box["interrupt"] = True
+                return
+            for _node, update in chunk.items():
+                if isinstance(update, dict):
+                    box.setdefault("final", {}).update(update)
+    except Exception as exc:  # noqa: BLE001
+        box["error"] = exc
+    finally:
+        queue.put_nowait(None)
 
 
 async def _read_thread(graph: Any, cfg: dict[str, Any]) -> dict[str, Any] | None:
