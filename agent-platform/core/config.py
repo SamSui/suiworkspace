@@ -146,6 +146,62 @@ class IngestSettings(_Section):
         return {e.strip().lower() for e in self.allowed_extensions.split(",") if e.strip()}
 
 
+class LLMSettings(_Section):
+    """LLM provider 链配置（增量 3.1）。
+
+    多 provider 兜底：`llm_providers` 为 JSON 数组（升序优先级，越靠前越优先），
+    主 provider 挂掉自动切下一个；熔断后可恢复（切回主）。本环境无外部付费凭据时，
+    可留空自动退化到内置 Echo 桩 provider，保证编排可端到端演示；真实接入在增量 4/5
+    联动时再注入 OpenAI 兼容 base_url + api_key（不擅自暴露/调用外部付费服务）。
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_", env_file=_ENV_FILE, extra="ignore", case_sensitive=False
+    )
+
+    providers: str = "[]"
+    connect_timeout: float = 5.0
+    read_timeout: float = 60.0
+    max_retries: int = 2
+    backoff_base: float = 0.5
+    backoff_max: float = 4.0
+    circuit_threshold: int = 3
+    circuit_open_seconds: float = 30.0
+    half_open_probe_limit: int = 3
+    temperature: float = 0.7
+    max_tokens: int = 1024
+
+    @property
+    def provider_list(self) -> list[dict[str, object]]:
+        """解析 providers JSON；非法/空 → []（调用方决定退化为 Echo）。"""
+        import json
+
+        if not self.providers or not self.providers.strip():
+            return []
+        try:
+            loaded = json.loads(self.providers)
+            return loaded if isinstance(loaded, list) else []
+        except (ValueError, TypeError):
+            return []
+
+
+class RetrievalSettings(_Section):
+    """混合检索 / 重排配置（增量 3.4）。"""
+
+    model_config = SettingsConfigDict(
+        env_prefix="RETRIEVAL_", env_file=_ENV_FILE, extra="ignore", case_sensitive=False
+    )
+
+    vector_top_k: int = 30
+    keyword_top_k: int = 30
+    rerank_top_k: int = 5
+    embed_dim: int = 768
+    cache_ttl_seconds: int = 300
+    # 真实 BGE-Reranker / Embedding 模型加载属后续增量联动；运行时默认用可插拔桩。
+    rerank_provider: str = "echo"  # echo | baai_bge（真实加载在 4/5 联动，届时核实资源）
+    embed_provider: str = "echo"
+
+
 class Settings(_Section):
     """聚合根。各分节自持 env 前缀，故此处不设统一前缀。"""
 
@@ -155,6 +211,8 @@ class Settings(_Section):
     milvus: MilvusSettings = Field(default_factory=MilvusSettings)
     es: ESSettings = Field(default_factory=ESSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
 
     @field_validator("app")
     @classmethod

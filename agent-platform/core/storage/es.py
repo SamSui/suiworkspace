@@ -125,3 +125,31 @@ class ESStore(BaseStore):
                 }
             )
         return hits
+
+    async def fetch_chunks(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """按 chunk_id（ES `_id`）批量取正文。generate 组装 prompt 时水合切片用。
+
+        文本不进编排状态（设计：state 只留引用），需要原文时按引用回查本方法。
+        """
+        client = self.client
+        if not chunk_ids:
+            return []
+        body: dict[str, Any] = {
+            "query": {"ids": {"values": chunk_ids}},
+            "size": len(chunk_ids),
+            "_source": ["doc_id", "kb_id", "text", "title"],
+        }
+        resp = await client.search(index=self._settings.index, **body)
+        hits: list[dict[str, Any]] = []
+        for hit in resp["hits"]["hits"]:
+            source = hit.get("_source", {})
+            hits.append(
+                {
+                    "chunk_id": hit["_id"],
+                    "doc_id": source.get("doc_id"),
+                    "kb_id": source.get("kb_id"),
+                    "title": source.get("title"),
+                    "text": source.get("text", ""),
+                }
+            )
+        return hits
