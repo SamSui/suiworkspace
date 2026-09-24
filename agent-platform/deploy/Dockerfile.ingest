@@ -1,0 +1,29 @@
+# 智能体中台 · ingest 摄入 worker 镜像（进程组 ②）——增量 5.1
+# 构建：
+#   docker build -f deploy/Dockerfile.ingest -t agent-ingest:latest .
+# 运行（arq worker，消费 Redis 队列；依赖六存储）：
+#   docker run --env-file .env agent-ingest:latest
+# 健康检查：arq worker 无 HTTP 接口，故容器健康以「主进程存活」为判据（K8s 用
+# liveness tcp/exec 即可；真实就绪由已摄入文档的可见性在查询侧兜底）。
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /srv/agent-platform
+COPY . .
+RUN pip install --no-cache-dir -e ".[parser,observability]"
+
+# 摄入依赖：运行前先建摄入目录；默认 data/uploads（与 core.config.INGEST_DATA_DIR 一致）
+ENV INGEST_DATA_DIR=data/uploads
+RUN mkdir -p "$INGEST_DATA_DIR"
+
+# arq worker 入口（`arq ingest.worker.WorkerSettings`）
+CMD ["arq", "ingest.worker.WorkerSettings"]
+
+# 进程存活探针：worker 进程在即认为活着（重启交给 K8s liveness exec）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/bin/true"]

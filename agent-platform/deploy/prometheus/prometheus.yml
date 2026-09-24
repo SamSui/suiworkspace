@@ -1,0 +1,47 @@
+# Prometheus 抓取配置（增量 5.4）
+# 抓取：api 网关 / langgraph 编排 / ingest worker 的 /metrics。
+# 私有 subnets 支持见 http_sd / kube-service-discovery；此处用 kubernetes_sd 面向 namespace。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: agent-platform
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # 网关 /metrics（公开路径，PUBLIC_PATHS 已加）
+  - job_name: agent-api
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_component]
+        regex: api
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+    metrics_path: /metrics
+
+  # 编排服务 /metrics
+  - job_name: agent-langgraph
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_component]
+        regex: langgraph
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: instance
+    metrics_path: /metrics
+
+  # ingest worker 无 HTTP /metrics——若以 sidecar 暴露则在此加入；否则靠网关聚合 QPS
+  - job_name: agent-ingest
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_component]
+        regex: ingest
+        action: keep

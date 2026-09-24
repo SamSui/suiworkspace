@@ -1,0 +1,81 @@
+# LangGraph 编排服务 Deployment + Service（增量 5.2）
+# 有状态（Checkpoint 在 Redis）、只对内网。滚动更新 maxUnavailable=0。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langgraph-service
+  namespace: agent-platform
+  labels:
+    app: agent
+    component: langgraph
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: agent
+      component: langgraph
+  template:
+    metadata:
+      labels:
+        app: agent
+        component: langgraph
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: langgraph
+          image: agent-langgraph:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8100
+          envFrom:
+            - configMapRef:
+                name: ap-env
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 4
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 4
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 384Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langgraph-service
+  namespace: agent-platform
+  labels:
+    app: agent
+    component: langgraph
+spec:
+  selector:
+    app: agent
+    component: langgraph
+  ports:
+    - name: http
+      port: 8100
+      targetPort: http
+  type: ClusterIP

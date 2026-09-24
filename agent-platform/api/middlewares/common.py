@@ -18,6 +18,8 @@ PUBLIC_PATHS: dict[str, frozenset[str] | None] = {
     "/docs": None,
     "/redoc": None,
     "/openapi.json": None,
+    # 可观测：Prometheus scrape 用（增量 5.4），免鉴权 / 免限流
+    "/metrics": None,
     # 认证引导（增量 2.1）：登录换取 JWT、公开注册首个用户——仅对应 method 免鉴权
     "/v1/auth/token": frozenset({"POST"}),
     "/v1/users": frozenset({"POST"}),

@@ -1,0 +1,48 @@
+# ingest 摄入 worker Deployment（增量 5.2）
+# arq 单 worker 串行双写（裁决 #3，max_jobs=1），故副本固定 1、不做 HPA。
+# liveness exec：进程存活（worker 无 HTTP 接口）；就绪由摄入可见性在查询侧兜底。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+  namespace: agent-platform
+  labels:
+    app: agent
+    component: ingest
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate      # 单副本串行 worker：更新先停旧再起新，避免双写并发冲突
+  selector:
+    matchLabels:
+      app: agent
+      component: ingest
+  template:
+    metadata:
+      labels:
+        app: agent
+        component: ingest
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: ingest
+          image: agent-ingest:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: ap-env
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "ps -p 1 >/dev/null"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 384Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi

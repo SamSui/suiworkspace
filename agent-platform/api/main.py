@@ -17,10 +17,12 @@ from fastapi import FastAPI
 from api import __version__
 from api.middlewares import (
     AuthMiddleware,
+    ObservabilityMiddleware,
     RateLimitMiddleware,
     TraceMiddleware,
     register_exception_handlers,
 )
+from api.middlewares.observability import add_metrics_router
 from api.routers import agent, auth, chat, document, health, knowledge, task, users
 from core.config import get_settings
 from core.logging import get_logger, setup_logging
@@ -61,10 +63,12 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # 添加顺序 = 由内向外（Starlette 后添加者在外层）。
-    # 目标层级：Trace → Auth → RateLimit → routes
-    # Auth 必须在 RateLimit 外层，限流才能按 user_id 而不是 IP 分组。
+    # 目标层级：Trace → Observability → Auth → RateLimit → routes
+    # Trace 最外层：先定 trace_id，Observability 的根 span 才能拿到同一 trace_id；
+    # Auth 在 RateLimit 外层，限流才能按 user_id 而不是 IP 分组。
     app.add_middleware(RateLimitMiddleware, settings=settings)
     app.add_middleware(AuthMiddleware, settings=settings)
+    app.add_middleware(ObservabilityMiddleware)
     app.add_middleware(TraceMiddleware)
 
     app.include_router(health.router)
@@ -75,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(document.router)
     app.include_router(agent.router)
     app.include_router(task.router)
+    add_metrics_router(app)
 
     return app
 
