@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from core.config import MilvusSettings
@@ -17,6 +18,16 @@ from core.logging import get_logger
 from core.storage.base import BaseStore
 
 logger = get_logger(__name__)
+
+
+def _observe_dependency(target: str, name: str, seconds: float) -> None:
+    """上报一次依赖调用耗时给可观测模块（幂等、no-op 安全）。"""
+    try:
+        from observability.prom import metrics
+
+        metrics.observe_dependency(target, name, seconds)
+    except Exception:  # noqa: BLE001 — 观测失败绝不影响存储调用
+        pass
 
 
 class MilvusStore(BaseStore):
@@ -72,6 +83,45 @@ class MilvusStore(BaseStore):
             raise StorageUnavailable("milvus 尚未连接，请先调用 connect()")
         return self._client
 
+    # ---------- 写入（摄入 4.3/4.4 用）----------
+
+    async def insert(self, rows: list[dict[str, Any]]) -> None:
+        """批量插入向量行（chunk_id/kb_id/doc_id/content_len/embedding）。
+
+        同步 SDK 调用经 `asyncio.to_thread` 卸载，不阻塞事件循环（增量 1 铁律）。
+        插入后**主动 flush**：保证「写入后可即刻被检索」不变量（pymilvus 2.x 插入
+        不一定立即可见，检索侧 follow-after-write 需要 flush）。
+        """
+        if not rows:
+            return
+        client = self.client
+        collection = self._settings.collection
+        t0 = time.monotonic()
+
+        def _run() -> None:
+            client.insert(collection_name=collection, data=rows)
+            client.flush(collection)
+
+        await asyncio.to_thread(_run)
+        _observe_dependency("milvus", "insert", time.monotonic() - t0)
+
+    async def delete_by_doc_id(self, doc_id: str) -> int:
+        """按 doc_id 清理残留（可重入前提，裁决 #3）。
+
+        收口增量 3 登记的待办：worker 不再直接拿同步 client.delete 阻塞事件循环。
+        返回删除条数（Milvus 返回 dictate；此处取最外层计数，失败不必阻断——查询侧兜底）。
+        """
+        client = self.client
+        collection = self._settings.collection
+
+        def _run() -> int:
+            res = client.delete(collection_name=collection, filter=f'doc_id == "{doc_id}"')
+            if isinstance(res, dict):
+                return int(res.get("delete_count") or 0)
+            return int(res or 0)
+
+        return await asyncio.to_thread(_run)
+
     # ---------- 检索（供 langgraph 节点调用）----------
 
     async def search(
@@ -100,5 +150,7 @@ class MilvusStore(BaseStore):
                 search_params={"metric_type": "COSINE", "params": {"ef": 64}},
             )
 
+        t0 = time.monotonic()
         results = await asyncio.to_thread(_run)
+        _observe_dependency("milvus", "search", time.monotonic() - t0)
         return results[0] if results else []

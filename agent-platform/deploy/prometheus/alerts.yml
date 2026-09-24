@@ -1,0 +1,59 @@
+# Prometheus 告警规则（增量 5.4）
+# 覆盖验收三件事：缓存命中率、检索 P99、错误率。
+groups:
+  - name: agent-platform.rules
+    rules:
+      # 检索缓存命中率过低（<40% 持续 5 分钟）→ 可能 embed 桩失效 / 缓存未预热
+      - alert: RetrievalCacheHitRateLow
+        expr: |
+          sum(rate(kb_cache_hits_total[5m])) /
+          clamp_min(sum(rate(kb_cache_hits_total[5m])) +
+                    sum(rate(kb_cache_misses_total[5m])), 1)
+          < 0.30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "检索缓存命中率偏低 (<30%)"
+          description: "命中率低于阈值——需核查 embed/rerank 桩与缓存 TTL。"
+
+      # 检索 P99 超阈值（>1s 持续 5 分钟）→ 检索链变慢
+      - alert: RetrievalP99High
+        expr: histogram_quantile(0.99, sum(rate(kb_retrieval_seconds_bucket[5m])) by (le)) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "检索 P99 超阈值"
+          description: "检索 P99 > 1s，可能 Milvus/ES 变慢或召回量过大。"
+
+      # 网关错误率过高（>5% 持续 5 分钟）
+      - alert: GatewayErrorRateHigh
+        expr: |
+          sum(rate(kb_errors_total{phase="gateway"}[5m])) /
+          sum(rate(kb_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关错误率超 5%"
+          description: "服务可能异常，请检查日志与链路。"
+
+      # 编排管道错误
+      - alert: OrchestrErrorHigh
+        expr: rate(kb_errors_total{phase="orchestr"}[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "编排错误率上升"
+
+      # LLM 依赖耗时 P99 健康
+      - alert: LLDependencySlow
+        expr: histogram_quantile(0.99, sum(rate(kb_dependency_seconds_bucket{target="llm"}[5m])) by (le)) > 5.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 依赖 P99 超 5s"

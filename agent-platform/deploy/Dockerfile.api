@@ -1,0 +1,36 @@
+# 智能体中台 · API 网关镜像（进程组 ①）——增量 5.1
+# 构建：
+#   docker build -f deploy/Dockerfile.api -t agent-api:latest .
+# 运行（需同网络内 langgraph_service 与六存储）：
+#   docker run -p 8000:8000 --env-file .env agent-api:latest
+# 健康检查对齐 `api/routers/health.py` 的 `/healthz/live`（liveness 不探依赖）。
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /srv/agent-platform
+
+# 先拷贝依赖声明与包结构（空包占位），利用层缓存
+COPY pyproject.toml ./
+COPY observability observability
+COPY core core
+COPY api api
+COPY db db
+COPY langgraph_service langgraph_service
+COPY ingest ingest
+
+# 本地安装：运行依赖 + parser/observability extra（OTel / Prometheus）
+RUN pip install --no-cache-dir -e ".[parser,observability]"
+
+EXPOSE 8000
+
+# 网关只做对外入口；启动即起 uvicorn
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# 健康检查：liveness 探活进程自身存活（探依赖交给 K8s readiness）
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
+    CMD python -c "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/healthz/live',timeout=3).status==200 else 1)"

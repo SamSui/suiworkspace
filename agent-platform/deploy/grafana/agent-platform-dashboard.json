@@ -1,0 +1,112 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "检索缓存命中率",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 20 }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum(rate(kb_cache_hits_total[5m])) / clamp_min(sum(rate(kb_cache_hits_total[5m])) + sum(rate(kb_cache_misses_total[5m])), 1)",
+          "legendFormat": "cache_hit_rate"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "检索延迟 P50 / P99 (秒)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": {
+        "expr": "histogram_quantile(0.99, sum(rate(kb_retrieval_seconds_bucket[5m])) by (le))",
+        "legendFormat": "P99"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "错误率",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": {
+        "expr": "sum(rate(kb_errors_total{phase=\"gateway\"}[5m])) / sum(rate(kb_requests_total[5m]))",
+        "legendFormat": "gateway_error_rate"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "依赖耗时 P99（LLM / Milvus / ES）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 4,
+      "targets": {
+        "expr": "histogram_quantile(0.99, sum(rate(kb_dependency_seconds_bucket[5m])) by (le, target))",
+        "legendFormat": "{{target}}"
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["agent-platform", "observability"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Agent Platform — 性能与故障面板",
+  "uid": "agent-platform-overview",
+  "version": 1,
+  "weekStart": ""
+}

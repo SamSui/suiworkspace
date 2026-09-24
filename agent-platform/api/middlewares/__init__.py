@@ -5,11 +5,13 @@
 
 from api.middlewares.auth import AuthMiddleware
 from api.middlewares.exception import register_exception_handlers
+from api.middlewares.observability import ObservabilityMiddleware
 from api.middlewares.ratelimit import RateLimitMiddleware
 from api.middlewares.tracing import TraceMiddleware
 
 __all__ = [
     "AuthMiddleware",
+    "ObservabilityMiddleware",
     "RateLimitMiddleware",
     "TraceMiddleware",
     "register_exception_handlers",

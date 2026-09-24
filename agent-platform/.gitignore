@@ -9,6 +9,8 @@ venv/
 .mypy_cache/
 build/
 dist/
+.coverage
+htmlcov/
 
 # 本地配置与数据（.env.example 是模板，.env 不入库）
 .env
@@ -16,3 +18,6 @@ dist/
 
 # 开发栈持久化卷（docker compose 挂载点）
 data/
+
+# 上传落盘目录（本地文件存储后端；对象存储接入后废弃）
+storage/uploads/

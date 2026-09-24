@@ -5,7 +5,8 @@
 """
 
 from langgraph_service.nodes.generate import generate_node
+from langgraph_service.nodes.hitl import hitl_gate
 from langgraph_service.nodes.retrieve import retrieve_node
 from langgraph_service.nodes.router import router_node
 
-__all__ = ["generate_node", "retrieve_node", "router_node"]
+__all__ = ["generate_node", "hitl_gate", "retrieve_node", "router_node"]

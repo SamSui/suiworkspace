@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
@@ -15,6 +16,16 @@ from core.logging import get_logger
 from core.storage.base import BaseStore
 
 logger = get_logger(__name__)
+
+
+def _observe_dependency(target: str, name: str, seconds: float) -> None:
+    """上报一次依赖调用耗时给可观测模块（幂等、no-op 安全）。"""
+    try:
+        from observability.prom import metrics
+
+        metrics.observe_dependency(target, name, seconds)
+    except Exception:  # noqa: BLE001 — 观测失败绝不影响存储调用
+        pass
 
 
 class ESStore(BaseStore):
@@ -83,6 +94,48 @@ class ESStore(BaseStore):
         logger.info("es index created", extra={"extra_fields": {"index": index}})
         return True
 
+    # ---------- 写入（摄入 4.4 双写 / 清理用）----------
+
+    async def bulk_index(self, documents: list[dict[str, Any]]) -> None:
+        """批量写原文切片。`_id` 由入参 chunk_id 固定 → 重跑天然幂等覆盖（不残留重复切片）。
+
+        用 elasticsearch-py 8.x 的 `operations` 扁平格式：每条 `{action 头} + {source}`。
+        """
+        if not documents:
+            return
+        client = self.client
+        operations: list[dict[str, Any]] = []
+        for doc in documents:
+            chunk_id = str(doc.get("chunk_id"))
+            if not chunk_id:
+                raise ValueError(f"ES 写入缺少 chunk_id: {doc}")
+            operations.append({"index": {"_index": self._settings.index, "_id": chunk_id}})
+            operations.append(doc)
+        t0 = time.monotonic()
+        resp = await client.bulk(operations=operations, refresh=True)
+        _observe_dependency("es", "bulk_index", time.monotonic() - t0)
+        if resp.get("errors"):
+            failed = [
+                item for item in resp.get("items", [])
+                if any(action.get("error") for action in item.values())
+            ]
+            detail = failed[0] if failed else resp
+            raise RuntimeError(f"ES bulk 写入部分失败: {detail}")
+        logger.info(
+            "es bulk indexed",
+            extra={"extra_fields": {"count": len(documents), "index": self._settings.index}},
+        )
+
+    async def delete_by_doc_id(self, kb_id: str, doc_id: str) -> int:
+        """按 kb_id+doc_id 清理残留——重跑摄入前的可重入清理（裁决 #3）。"""
+        client = self.client
+        from db.mappings_es import delete_by_doc_id_body
+
+        resp = await client.delete_by_query(
+            index=self._settings.index, **delete_by_doc_id_body(kb_id, doc_id)
+        )
+        return int(resp.get("deleted") or 0)
+
     # ---------- 检索（供 langgraph 节点调用）----------
 
     async def keyword_search(
@@ -109,7 +162,9 @@ class ESStore(BaseStore):
                 "fields": {"text": {"fragment_size": 120, "number_of_fragments": 1}}
             }
 
+        t0 = time.monotonic()
         resp = await client.search(index=self._settings.index, **body)
+        _observe_dependency("es", "search_keyword", time.monotonic() - t0)
         hits: list[dict[str, Any]] = []
         for hit in resp["hits"]["hits"]:
             source = hit.get("_source", {})
@@ -122,6 +177,36 @@ class ESStore(BaseStore):
                     "title": source.get("title"),
                     "text": source.get("text", ""),
                     "highlight": (hit.get("highlight", {}).get("text") or [None])[0],
+                }
+            )
+        return hits
+
+    async def fetch_chunks(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """按 chunk_id（ES `_id`）批量取正文。generate 组装 prompt 时水合切片用。
+
+        文本不进编排状态（设计：state 只留引用），需要原文时按引用回查本方法。
+        """
+        client = self.client
+        if not chunk_ids:
+            return []
+        body: dict[str, Any] = {
+            "query": {"ids": {"values": chunk_ids}},
+            "size": len(chunk_ids),
+            "_source": ["doc_id", "kb_id", "text", "title"],
+        }
+        t0 = time.monotonic()
+        resp = await client.search(index=self._settings.index, **body)
+        _observe_dependency("es", "fetch_chunks", time.monotonic() - t0)
+        hits: list[dict[str, Any]] = []
+        for hit in resp["hits"]["hits"]:
+            source = hit.get("_source", {})
+            hits.append(
+                {
+                    "chunk_id": hit["_id"],
+                    "doc_id": source.get("doc_id"),
+                    "kb_id": source.get("kb_id"),
+                    "title": source.get("title"),
+                    "text": source.get("text", ""),
                 }
             )
         return hits

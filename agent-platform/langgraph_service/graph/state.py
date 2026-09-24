@@ -41,10 +41,16 @@ class AgentState(TypedDict, total=False):
     # --- 检索 ---
     retrieved: list[RetrievedChunk]
 
+    # --- HITL（增量 3.6）---
+    hitl_required: bool  # 命中需人工审批的场景则该节点先挂起
+    hitl_verdict: str | None  # resume 后的人工决策（approve / reject）
+    aborted: bool  # 人工取消后置位，generate 据此短路不再调 LLM
+
     # --- 生成 ---
     answer: str
     citations: list[str]
     usage: dict[str, Any]
+    llm_provider: str | None  # 本趟实际命中的 provider（观测用）
 
     # --- 对话历史（LangGraph 内置 reducer，按消息追加而非覆盖）---
     messages: Annotated[list[Any], add_messages]
