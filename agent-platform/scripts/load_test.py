@@ -6,8 +6,9 @@
 1. 离线（默认，`--svc-url` 空）：复用检索链确定性桩走纯逻辑并发，得到 Python 侧
    吞吐与 P50/P95/P99。不含真实 Milvus/ES/LLM-RPC 延迟——容量值是**逻辑下限**，
    本工作区零依赖可跑，作为证据。
-2. 在线（`--svc-url` 指向真实编排）：对 `/v1/stream` 压测，结果含真实编排与存储
-   延迟。依赖六存储栈，本工作区无 docker，故此项登记为**未跑项**。
+2. 在线（`--svc-url` 指向真实编排，`--token` 给 Bearer JWT）：对 `/v1/chat/stream`
+   压测，结果含真实编排与存储延迟。依赖六存储栈与网关鉴权（注册→换 JWT）。
+   六服务在线压测已在增量 5 补跑登记中实跑（见 5.5 交付回传）。
 
 扩容阈值：以 CPU 均用率 ≥70% 触发 HPA（对应 `api-hpa.yaml`），与 Little's Law
 反推的单副本并发数共同给出建议。
@@ -41,7 +42,7 @@ async def _online_one(
     async with sem:
         t0 = time.monotonic()
         body = {"thread_id": f"lt{seq}", "query": payloads[seq % len(payloads)]}
-        async with client.stream("POST", "/v1/stream", json=body) as resp:
+        async with client.stream("POST", "/v1/chat/stream", json=body) as resp:
             resp.raise_for_status()
             async for _ in resp.aiter_lines():
                 pass
@@ -50,7 +51,7 @@ async def _online_one(
         results.append(dur)
 
 
-async def _run(total: int, concurrency: int, svc_url: str) -> dict:
+async def _run(total: int, concurrency: int, svc_url: str, token: str = "") -> dict:
     sem = asyncio.Semaphore(concurrency)
     results: list[float] = []
     payloads = ["报销流程是什么", "请假制度怎么走", "绩效哪里查"]
@@ -60,7 +61,8 @@ async def _run(total: int, concurrency: int, svc_url: str) -> dict:
     if online:
         import httpx
 
-        async with httpx.AsyncClient(base_url=svc_url, timeout=60) as client:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient(base_url=svc_url, timeout=60, headers=headers) as client:
             tasks = [
                 asyncio.create_task(_online_one(sem, client, payloads, i, results))
                 for i in range(total)
@@ -101,9 +103,10 @@ def main() -> None:
     ap.add_argument("--concurrency", type=int, default=20)
     ap.add_argument("--total", type=int, default=200)
     ap.add_argument("--svc-url", default=os.getenv("SVC_URL", ""))
+    ap.add_argument("--token", default=os.getenv("AGENT_TOKEN", ""))
     args = ap.parse_args()
 
-    report = asyncio.run(_run(args.total, args.concurrency, args.svc_url))
+    report = asyncio.run(_run(args.total, args.concurrency, args.svc_url, args.token))
 
     print("=" * 60)
     print("压测报告（增量 5.5）")
@@ -112,9 +115,9 @@ def main() -> None:
         print(f"  {k}: {v}")
     print("=" * 60)
     if not report["mode"] == "online":
-        print("  [离线] 纯逻辑 + 合成时延；容量为**下限**。真实栈需 docker 六服务，登记未跑项。")
+        print("  [离线] 纯逻辑+合成时延，容量为下限。真实栈需 --svc-url + --token 在线跑。")
     else:
-        print("  [在线] 结果含真实编排耗时；本工作区无六服务栈，此输出为占位未跑。")
+        print("  [在线] 结果含真实编排与存储耗时（六存储栈实测）。")
 
 
 if __name__ == "__main__":
