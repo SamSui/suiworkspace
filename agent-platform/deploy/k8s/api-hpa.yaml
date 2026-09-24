@@ -1,0 +1,127 @@
+# API 网关 Deployment（增量 5.2）
+# 网关无状态、对外；滚动更新不中断（maxUnavailable=0 + maxSurge=1）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: agent-platform
+  labels:
+    app: agent
+    component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0        # 更新期间不掉可用副本
+      maxSurge: 1              # 先起一个新副本再缩旧的
+  selector:
+    matchLabels:
+      app: agent
+      component: api
+  template:
+    metadata:
+      labels:
+        app: agent
+        component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: api
+          image: agent-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ap-env
+          # JWT 密钥与 DB 密码：生产应从 Secret 注入，此处用 env 占位模板
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ap-secret
+                  key: jwt-secret
+          livenessProbe:                 # 进程存活，不探依赖
+            httpGet:
+              path: /healthz/live
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:                # 依赖 READY 才进 Service（聚合 /healthz）
+            httpGet:
+              path: /healthz/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 4
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api
+  namespace: agent-platform
+  labels:
+    app: agent
+    component: api
+spec:
+  selector:
+    app: agent
+    component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+# 网关按 QPS 弹性：以 `kb_requests_total` 的 QPS 作为扩容信号。
+# K8s 原生 HPA 用 CPU/内存或 custom metric（Prometheus Adapter 提供外置指标）。
+# 这里给 CPU-based HPA（兜底可跑），并注释 QPS 自定义指标——两者是同一扩容意图的两条实现。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-api
+  namespace: agent-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 8
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # 网关按 QPS 弹性（需要 Prometheus Adapter 提供 kb_requests_total 速率指标）：
+    #   external:
+    #     metric:
+    #       name: kb_qps
+    #       selector: { matchLabels: { component: api } }
+    #     target:
+    #       type: AverageValue
+    #       averageValue: 50

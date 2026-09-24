@@ -1,0 +1,24 @@
+# 智能体中台 · 网关 / 编排共享配置（增量 5.2）
+# 六存储为集群内的有 StatefulSet 服务；这里注入各组件连接地址。
+# 生产密钥（JWT_SECRET、DB 密码）应从 Secret 注入，而非本 ConfigMap（此处仅示例占位）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ap-env
+  namespace: agent-platform
+data:
+  APP_ENV: "prod"
+  APP_DEBUG: "false"
+  APP_LOG_LEVEL: "INFO"
+  # 网关 → 编排服务（同 namespace 内 Service DNS）
+  LANGGRAPH_SERVICE_URL: "http://langgraph-service:8100"
+  # 存储（K8s 内六服务；与 docker-compose 的 ap-* 不同名，按集群实际 Service 改）
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "agent"
+  MYSQL_DATABASE: "agent_platform"
+  REDIS_URL: "redis://redis:6379/0"
+  MILVUS_HOST: "milvus"
+  MILVUS_PORT: "19530"
+  ES_HOSTS: "http://elasticsearch:9200"
+  INGEST_DATA_DIR: "/data/uploads"

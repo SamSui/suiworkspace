@@ -22,7 +22,7 @@ from threading import Lock
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,7 @@ from langgraph_service.graph.rag_graph import build_rag_graph
 from langgraph_service.llm import LLMClient
 from langgraph_service.metrics import bump
 from langgraph_service.sse import HEARTBEAT_INTERVAL, SSEEncoder
+from observability.prom import metrics as prom_metrics
 
 logger = get_logger(__name__)
 
@@ -147,6 +148,14 @@ def create_app() -> FastAPI:
         healthy = healthy and has_checkpointer
         return JSONResponse(status_code=200 if healthy else 503, content=summary)
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_export() -> Response:
+        """Prometheus 文本指标（增量 5.4：缓存命中率 / 检索 P99 / 错误率 / 依赖耗时）。"""
+        from fastapi.responses import Response
+
+        body, ctype = prom_metrics.generate_latest()
+        return Response(content=body, media_type=ctype)
+
     @app.post("/v1/stream")
     async def stream(payload: RunRequest, request: Request) -> StreamingResponse:
         """SSE 流式执行图。网关侧只做透传，不缓冲。"""
@@ -192,6 +201,7 @@ def create_app() -> FastAPI:
                 # 图结束：error / interrupt / done
                 if box.get("error"):
                     exc = box["error"]
+                    prom_metrics.error("orchestr")
                     yield enc.error(
                         code="llm_timeout" if isinstance(exc, UpstreamError) else "stream_error",
                         message=str(exc),

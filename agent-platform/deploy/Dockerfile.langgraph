@@ -1,0 +1,24 @@
+# 智能体中台 · LangGraph 编排服务镜像（进程组 ②）——增量 5.1
+# 构建：
+#   docker build -f deploy/Dockerfile.langgraph -t agent-langgraph:latest .
+# 运行（只对内网，由 api 网关调用；依赖六存储，Checkpoint=RedisSaver）：
+#   docker run -p 8100:8100 --env-file .env agent-langgraph:latest
+# 健康检查对齐 `langgraph_service/main.py` 的 `/healthz`（编排不可用即 503）。
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /srv/agent-platform
+COPY . .
+RUN pip install --no-cache-dir -e ".[parser,observability]"
+
+EXPOSE 8100
+CMD ["uvicorn", "langgraph_service.main:app", "--host", "0.0.0.0", "--port", "8100"]
+
+# 健康检查：readiness 语义（编排不可用即不健康 → 从 LB 摘掉）
+HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=5 \
+    CMD python -c "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8100/healthz',timeout=4).status==200 else 1)"

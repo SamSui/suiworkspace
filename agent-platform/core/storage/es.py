@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
@@ -15,6 +16,16 @@ from core.logging import get_logger
 from core.storage.base import BaseStore
 
 logger = get_logger(__name__)
+
+
+def _observe_dependency(target: str, name: str, seconds: float) -> None:
+    """上报一次依赖调用耗时给可观测模块（幂等、no-op 安全）。"""
+    try:
+        from observability.prom import metrics
+
+        metrics.observe_dependency(target, name, seconds)
+    except Exception:  # noqa: BLE001 — 观测失败绝不影响存储调用
+        pass
 
 
 class ESStore(BaseStore):
@@ -100,7 +111,9 @@ class ESStore(BaseStore):
                 raise ValueError(f"ES 写入缺少 chunk_id: {doc}")
             operations.append({"index": {"_index": self._settings.index, "_id": chunk_id}})
             operations.append(doc)
+        t0 = time.monotonic()
         resp = await client.bulk(operations=operations, refresh=True)
+        _observe_dependency("es", "bulk_index", time.monotonic() - t0)
         if resp.get("errors"):
             failed = [
                 item for item in resp.get("items", [])
@@ -149,7 +162,9 @@ class ESStore(BaseStore):
                 "fields": {"text": {"fragment_size": 120, "number_of_fragments": 1}}
             }
 
+        t0 = time.monotonic()
         resp = await client.search(index=self._settings.index, **body)
+        _observe_dependency("es", "search_keyword", time.monotonic() - t0)
         hits: list[dict[str, Any]] = []
         for hit in resp["hits"]["hits"]:
             source = hit.get("_source", {})
@@ -179,7 +194,9 @@ class ESStore(BaseStore):
             "size": len(chunk_ids),
             "_source": ["doc_id", "kb_id", "text", "title"],
         }
+        t0 = time.monotonic()
         resp = await client.search(index=self._settings.index, **body)
+        _observe_dependency("es", "fetch_chunks", time.monotonic() - t0)
         hits: list[dict[str, Any]] = []
         for hit in resp["hits"]["hits"]:
             source = hit.get("_source", {})

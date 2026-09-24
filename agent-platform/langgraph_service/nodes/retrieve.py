@@ -29,6 +29,8 @@ from langgraph_service.retrieval import (
     rerank_chunks,
     retrieval_cache_key,
 )
+from observability import otel
+from observability.prom import metrics as prom_metrics
 
 logger = get_logger(__name__)
 
@@ -53,74 +55,86 @@ async def retrieve_node(
     kb_id = state.get("kb_id")
     start = time.perf_counter()
 
-    # 1) 缓存命中 → 直接返回（跳过召回/融合/重排）
-    cached = None
-    if redis_store is not None:
-        cached = await redis_store.get_json(_cache_key(settings, query, kb_id))
-    if cached:
-        bump("retrieval.cache_hit")
+    with otel.span("node.retrieve", kb_id=str(kb_id or ""), query=query[:80]) as rt_span:
+        # 1) 缓存命中 → 直接返回（跳过召回/融合/重排）
+        cached = None
+        if redis_store is not None:
+            cached = await redis_store.get_json(_cache_key(settings, query, kb_id))
+        if cached:
+            bump("retrieval.cache_hit")
+            prom_metrics.cache_hit()
+            rt_span.attributes["cache"] = "hit"
+            record_metric("retrieval.total_ms", (time.perf_counter() - start) * 1000)
+            prom_metrics.observe_retrieval(time.perf_counter() - start)
+            logger.info("retrieval cache hit", extra={"extra_fields": {"query": query}})
+            return {"retrieved": cached}
+
+        bump("retrieval.cache_miss")
+        prom_metrics.cache_miss()
+        rt_span.attributes["cache"] = "miss"
+
+        # 2) 并发召回：向量 + 关键词
+        vector_hits: list[dict[str, Any]] = []
+        keyword_hits: list[dict[str, Any]] = []
+
+        async def _vector() -> None:
+            nonlocal vector_hits
+            if milvus is None or not kb_id:
+                return
+            with otel.span("dependency.milvus.search"):
+                vec = await embed_query(
+                    query, settings.retrieval.embed_dim, settings.retrieval.embed_provider
+                )
+                rows = await milvus.search(
+                    vec,
+                    kb_id=kb_id,
+                    top_k=settings.retrieval.vector_top_k,
+                    output_fields=["chunk_id", "doc_id", "kb_id"],
+                )
+            vector_hits = [
+                {
+                    "chunk_id": r.get("chunk_id") or r.get("id"),
+                    "doc_id": r.get("doc_id"),
+                    "kb_id": r.get("kb_id"),
+                    # pymilvus 返回 `distance`；现贴 score 以统一融合层入参
+                    "score": float(r.get("distance") or r.get("score") or 0.0),
+                }
+                for r in rows
+                if (r.get("chunk_id") or r.get("id"))
+            ]
+
+        async def _keyword() -> None:
+            nonlocal keyword_hits
+            if es is None or not kb_id:
+                return
+            with otel.span("dependency.es"):
+                keyword_hits = await es.keyword_search(
+                    query, kb_id=kb_id, top_k=settings.retrieval.keyword_top_k
+                )
+
+        await asyncio.gather(_vector(), _keyword())
+
+        # 3) 融合去重 + 重排（top-K）
+        with otel.span("rerank"):
+            fused = await fuse_dedup(
+                vector_hits, keyword_hits, top_k=settings.retrieval.keyword_top_k
+            )
+            reranked = await rerank_chunks(
+                query, fused, settings.retrieval.rerank_top_k, settings.retrieval.rerank_provider
+            )
+
         record_metric("retrieval.total_ms", (time.perf_counter() - start) * 1000)
-        logger.info("retrieval cache hit", extra={"extra_fields": {"query": query}})
-        return {"retrieved": cached}
+        prom_metrics.observe_retrieval(time.perf_counter() - start)
 
-    bump("retrieval.cache_miss")
+        # 4) 写缓存（桩环境也写，保证同 query 二访命中——单测据此断言「缓存命中跳过检索」）
+        if redis_store is not None:
+            await redis_store.set_json(
+                _cache_key(settings, query, kb_id),
+                reranked,
+                ttl_seconds=settings.retrieval.cache_ttl_seconds,
+            )
 
-    # 2) 并发召回：向量 + 关键词
-    vector_hits: list[dict[str, Any]] = []
-    keyword_hits: list[dict[str, Any]] = []
-
-    async def _vector() -> None:
-        nonlocal vector_hits
-        if milvus is None or not kb_id:
-            return
-        vec = await embed_query(
-            query, settings.retrieval.embed_dim, settings.retrieval.embed_provider
-        )
-        rows = await milvus.search(
-            vec,
-            kb_id=kb_id,
-            top_k=settings.retrieval.vector_top_k,
-            output_fields=["chunk_id", "doc_id", "kb_id"],
-        )
-        vector_hits = [
-            {
-                "chunk_id": r.get("chunk_id") or r.get("id"),
-                "doc_id": r.get("doc_id"),
-                "kb_id": r.get("kb_id"),
-                # pymilvus 返回 `distance`；现贴 score 以统一融合层入参
-                "score": float(r.get("distance") or r.get("score") or 0.0),
-            }
-            for r in rows
-            if (r.get("chunk_id") or r.get("id"))
-        ]
-
-    async def _keyword() -> None:
-        nonlocal keyword_hits
-        if es is None or not kb_id:
-            return
-        keyword_hits = await es.keyword_search(
-            query, kb_id=kb_id, top_k=settings.retrieval.keyword_top_k
-        )
-
-    await asyncio.gather(_vector(), _keyword())
-
-    # 3) 融合去重 + 重排（top-K）
-    fused = await fuse_dedup(vector_hits, keyword_hits, top_k=settings.retrieval.keyword_top_k)
-    reranked = await rerank_chunks(
-        query, fused, settings.retrieval.rerank_top_k, settings.retrieval.rerank_provider
-    )
-
-    record_metric("retrieval.total_ms", (time.perf_counter() - start) * 1000)
-
-    # 4) 写缓存（桩环境也写，保证同 query 二访命中——单测据此断言「缓存命中跳过检索」）
-    if redis_store is not None:
-        await redis_store.set_json(
-            _cache_key(settings, query, kb_id),
-            reranked,
-            ttl_seconds=settings.retrieval.cache_ttl_seconds,
-        )
-
-    return {"retrieved": reranked}
+        return {"retrieved": reranked}
 
 
 __all__ = ["retrieve_node"]

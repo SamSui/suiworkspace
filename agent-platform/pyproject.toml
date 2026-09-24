@@ -52,7 +52,7 @@ parser = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["api*", "langgraph_service*", "ingest*", "core*", "db*"]
+include = ["api*", "langgraph_service*", "ingest*", "core*", "db*", "observability*"]
 
 [tool.ruff]
 line-length = 100

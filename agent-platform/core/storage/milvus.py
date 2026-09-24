@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from core.config import MilvusSettings
@@ -17,6 +18,16 @@ from core.logging import get_logger
 from core.storage.base import BaseStore
 
 logger = get_logger(__name__)
+
+
+def _observe_dependency(target: str, name: str, seconds: float) -> None:
+    """上报一次依赖调用耗时给可观测模块（幂等、no-op 安全）。"""
+    try:
+        from observability.prom import metrics
+
+        metrics.observe_dependency(target, name, seconds)
+    except Exception:  # noqa: BLE001 — 观测失败绝不影响存储调用
+        pass
 
 
 class MilvusStore(BaseStore):
@@ -85,12 +96,14 @@ class MilvusStore(BaseStore):
             return
         client = self.client
         collection = self._settings.collection
+        t0 = time.monotonic()
 
         def _run() -> None:
             client.insert(collection_name=collection, data=rows)
             client.flush(collection)
 
         await asyncio.to_thread(_run)
+        _observe_dependency("milvus", "insert", time.monotonic() - t0)
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
         """按 doc_id 清理残留（可重入前提，裁决 #3）。
@@ -137,5 +150,7 @@ class MilvusStore(BaseStore):
                 search_params={"metric_type": "COSINE", "params": {"ef": 64}},
             )
 
+        t0 = time.monotonic()
         results = await asyncio.to_thread(_run)
+        _observe_dependency("milvus", "search", time.monotonic() - t0)
         return results[0] if results else []

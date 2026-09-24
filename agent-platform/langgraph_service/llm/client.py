@@ -34,6 +34,16 @@ logger = get_logger(__name__)
 _REACHABLE_TIMEOUT_S = 5.0  # async generator 驱动的探针 sleep 下限（供 HALF_OPEN 判定）
 
 
+def _observe_dependency(target: str, name: str, seconds: float) -> None:
+    """把一次依赖调用耗时上报给可观测模块（幂等 no-op 安全）。"""
+    try:
+        from observability.prom import metrics
+
+        metrics.observe_dependency(target, name, seconds)
+    except Exception:  # noqa: BLE001 — 观测失败绝不影响业务
+        pass
+
+
 class LLMError(UpstreamError):
     """所有 LLM 调用失败统一收口为此异常（外层据此决定熔断/切备）。"""
 
@@ -205,6 +215,7 @@ class LLMClient:
                         record_metric("llm.first_token_ms", (first_ts - start) * 1000)
                     yield token
                 record_metric("llm.total_ms", (time.monotonic() - start) * 1000)
+                _observe_dependency("llm", provider.name, time.monotonic() - start)
                 return
             except Exception as exc:  # noqa: BLE001 — 收敛为 retryable 判定
                 last_err = exc

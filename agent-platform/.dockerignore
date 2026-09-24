@@ -1,0 +1,17 @@
+# 镜像构建上下文忽略项——保持镜像精简、避免把本机开发产物/敏感信息打进镜像
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.gitignore
+.env
+.env.example
+*.md
+docs/
+deploy/
+tests/
+scripts/
+node_modules/
