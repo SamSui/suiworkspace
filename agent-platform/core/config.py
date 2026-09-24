@@ -140,7 +140,12 @@ class IngestSettings(_Section):
     chunk_overlap: int = 100
     max_document_mb: int = 200
     allowed_extensions: str = ".pdf,.docx,.md,.txt"
-    data_dir: str = "data/uploads"  # 摄入源文件落盘根目录：{data_dir}/{kb_id}/{doc_id}/{file_name}
+# 摄入源文件落盘根目录（增量 2.4 网关 与 增量 3/4/5 摄入 worker 共用同一根目录）。
+    # 说明：增量 2.4 网关按 `{data_dir}/{kb_id}/{hash[:2]}/{hash}` 落盘；增量 4 worker
+    # `resolve_document_path` 按 `{data_dir}/{kb_id}/{doc_id}/{file_name}` 取源文件。
+    # 两套路径约定尚未对齐（见 SUIG-10 收口备注）——合并中两边字段均已保留，未做静默改写。
+    data_dir: str = "storage/uploads"
+    upload_dir: str = "storage/uploads"  # 网关 save_upload/delete_upload 所用根目录
 
     @property
     def allowed_ext_set(self) -> set[str]:
