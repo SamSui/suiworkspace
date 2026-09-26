@@ -81,7 +81,7 @@ async def retrieve_node(
             nonlocal vector_hits
             if milvus is None or not kb_id:
                 return
-            with otel.span("dependency.milvus.search"):
+            with rt_span.child("dependency.milvus.search"):
                 vec = await embed_query(
                     query, settings.retrieval.embed_dim, settings.retrieval.embed_provider
                 )
@@ -107,7 +107,7 @@ async def retrieve_node(
             nonlocal keyword_hits
             if es is None or not kb_id:
                 return
-            with otel.span("dependency.es"):
+            with rt_span.child("dependency.es"):
                 keyword_hits = await es.keyword_search(
                     query, kb_id=kb_id, top_k=settings.retrieval.keyword_top_k
                 )
@@ -115,7 +115,7 @@ async def retrieve_node(
         await asyncio.gather(_vector(), _keyword())
 
         # 3) 融合去重 + 重排（top-K）
-        with otel.span("rerank"):
+        with rt_span.child("rerank"):
             fused = await fuse_dedup(
                 vector_hits, keyword_hits, top_k=settings.retrieval.keyword_top_k
             )

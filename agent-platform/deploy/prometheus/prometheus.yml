@@ -1,5 +1,6 @@
-# Prometheus 抓取配置（增量 5.4）
-# 抓取：api 网关 / langgraph 编排 / ingest worker 的 /metrics。
+# Prometheus 抓取配置（增量 5.4 / SUIG-28 ②）
+# 抓取：api 网关 / langgraph 编排 的 /metrics。
+# ingest worker 无 HTTP /metrics 亦无 Service，故不声明 agent-ingest job（见下方说明）。
 # 私有 subnets 支持见 http_sd / kube-service-discovery；此处用 kubernetes_sd 面向 namespace。
 global:
   scrape_interval: 15s
@@ -37,11 +38,6 @@ scrape_configs:
         target_label: instance
     metrics_path: /metrics
 
-  # ingest worker 无 HTTP /metrics——若以 sidecar 暴露则在此加入；否则靠网关聚合 QPS
-  - job_name: agent-ingest
-    kubernetes_sd_configs:
-      - role: endpoints
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_service_label_component]
-        regex: ingest
-        action: keep
+  # ingest worker：arq 常驻进程，无 HTTP /metrics 无 K8s Service（liveness 走 exec ps），
+  # 故意不声明 agent-ingest job，避免 Prometheus 对空 service 抓取而静默为零（SUIG-28 ②）。
+  # ingest 的流量/可见性由网关聚合 QPS 与 document.status 状态机在查询侧兜底呈现。

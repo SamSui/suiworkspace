@@ -163,3 +163,75 @@ def test_observability_imports_safe():
 
     assert hasattr(observability.otel, "span")
     assert hasattr(observability.prom, "metrics")
+
+
+# ---------------- 5.3（SUIG-28 ③）：retrieve 依赖 span 归 node.retrieve 子级 ----------------
+
+class _RetrFakeStore:
+    """仍保留 get_json/set_json 双法（缓存未命中走召回路径）。"""
+
+    def __init__(self, cache=None):
+        self._cache = cache or {}
+
+    async def get_json(self, key):
+        return self._cache.get(key)
+
+    async def set_json(self, key, value, *, ttl_seconds):
+        self._cache[key] = value
+
+
+class _RetrFakeMilvus:
+    async def search(self, vec, *, kb_id, top_k, output_fields=None):
+        return [{"chunk_id": "c1", "doc_id": "d1", "kb_id": kb_id, "score": 0.9}]
+
+
+class _RetrFakeES:
+    async def keyword_search(self, query, *, kb_id, top_k, highlight=True):
+        return [{"chunk_id": "c1", "doc_id": "d1", "kb_id": kb_id, "score": 8.0, "highlight": "报销"}]
+
+
+async def test_retrieve_dependency_spans_are_children_of_node_retrieve():
+    """SUIG-28 ③：milvus/es/rerank 三 span 应从独立平级改为挂 node.retrieve 子级。"""
+    from langgraph_service.nodes.retrieve import retrieve_node
+
+    _clean()
+    store = _RetrFakeStore({})  # 空缓存 → 走召回路径
+    container = type("C", (), {"redis": store, "milvus": _RetrFakeMilvus(), "es": _RetrFakeES()})()
+    settings = type(
+        "S",
+        (),
+        {
+            "retrieval": type(
+                "R",
+                (),
+                {
+                    "embed_dim": 8,
+                    "embed_provider": "echo",
+                    "vector_top_k": 30,
+                    "keyword_top_k": 30,
+                    "rerank_top_k": 5,
+                    "rerank_provider": "echo",
+                    "cache_ttl_seconds": 10,
+                },
+            )(),
+            "redis": type("RS", (), {"prefix_retrieval_cache": "cache:ret:"})(),
+        },
+    )()
+    cfg = {"configurable": {"deps": {"container": container, "settings": settings}}}
+
+    upd = await retrieve_node({"query": "复盘", "kb_id": "k1"}, cfg)
+    assert upd["retrieved"]  # 召回路径真实走了
+
+    spans = otel.get_sink().spans()
+    by_name = {s.name: s for s in spans}
+    assert set(by_name) >= {
+        "node.retrieve",
+        "dependency.milvus.search",
+        "dependency.es",
+        "rerank",
+    }
+    # 三个依赖 span 都归 node.retrieve 子级（不再平级游离）
+    for child in ("dependency.milvus.search", "dependency.es", "rerank"):
+        assert by_name[child].parent_name == "node.retrieve"
+    # node.retrieve 自身为根（无父）
+    assert by_name["node.retrieve"].parent_name is None

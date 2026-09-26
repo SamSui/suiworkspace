@@ -29,7 +29,9 @@
 - **入口**：新增 `ObservabilityMiddleware`（放在 `TraceMiddleware` 内侧、`Auth/RateLimit` 外层）；
   每请求开一个根 span `http.request`，并记请求量/在途数/错误率。
 - **编排节点**：`retrieve_node` 包 `node.retrieve` span，并对缓存命中/未命中与检索总时延打点；
-  Milvus/ES 检索包 `dependency.milvus.search` / `dependency.es` span。
+  Milvus/ES 检索包 `dependency.milvus.search` / `dependency.es`、重排包 `rerank`，
+  三者经 `rt_span.child(...)` **归为 `node.retrieve` 的子 span**（SUIG-28 ③ 修正：不再平级游离），
+  链路以 `node.retrieve → {dependency.milvus.search | dependency.es | rerank}` 呈现。
 - **LLM**：`llm/client.py` 完成一次流后记依赖耗时（`target=llm`）。
 - **存储**：`core/storage/{es,milvus}.py` 在 search/insert/bulk_index 统计耗时。
 
@@ -57,10 +59,14 @@ Prometheus 指标（前缀 `kb_`，由 `observability/prom.Metrics` 统一打点
 | `kb_requests_total{route}` / `kb_requests_inflight` | 吞吐 / 在途 | 流量 + HPA 参考 |
 
 导出：`GET /metrics`（`api` 与 `langgraph_service` 均挂载；`/metrics` 加入 `PUBLIC_PATHS` 免鉴权）。
+**ingest worker 可观测口径（SUIG-28 ②）**：arq 常驻进程无 HTTP `/metrics`、无 K8s Service
+（liveness 走 exec `ps`），故不声明 `agent-ingest` job
+避免 Prometheus 对空 service 抓取而静默为零；其流量/可见性由网关聚合 QPS 与
+`document.status` 状态机在查询侧兜底呈现。
 桥接：既有 `langgraph_service.metrics` 直方图经 `kb_inproc_metric_seconds` 并入 Prometheus，
 避免新埋点可见、旧埋点不可见。
-Grafana 面板 `deploy/grafana/agent-platform-dashboard.json`：缓存命中率、检索 P50/P99、
-错误率、依赖耗时四面板。
+Grafana 面板 `deploy/grafana/agent-platform-dashboard.json`：缓存命中率、检索 P50/P99
+（P50、P99 两条 series，SUIG-28 ①）、错误率、依赖耗时四面板。
 告警 `deploy/prometheus/alerts.yml` 5 条（缓存命中率<30%、检索 P99>1s、网关错误率>5%、
 编排错误率、LLM 耗时>5s）。
 
