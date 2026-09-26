@@ -33,6 +33,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: ap-env
+          # prod 模式校验 JWT_SECRET（与 api 一致，从 Secret 注入）
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ap-secret
+                  key: jwt-secret
           livenessProbe:
             exec:
               command: ["sh", "-c", "ps -p 1 >/dev/null"]
