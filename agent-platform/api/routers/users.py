@@ -23,6 +23,7 @@ from api.schemas.auth import (
 )
 from core.exceptions import Conflict, NotFound
 from core.logging import get_logger
+from core.rbac import ensure_user_permission_seed
 from core.security import generate_api_key, hash_api_key
 from db.models import User
 
@@ -53,7 +54,10 @@ async def create_user(
         user = User(name=payload.name, api_key=hash_api_key(plain), status=1)
         session.add(user)
         await session.flush()
+        # SUIG-34：注册即补齐「一人一默认租户 + admin 角色 + 全权限」，同事务提交
+        await ensure_user_permission_seed(session, user)
         # server_default 的 created_at 在 flush 后于库侧生成，需显式回读（异步下禁止属性懒加载）。
+        await session.flush()
         await session.refresh(user)
         user_id_out = int(user.id)
         created_at = user.created_at

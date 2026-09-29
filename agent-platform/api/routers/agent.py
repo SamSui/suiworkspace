@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from api.deps import current_user, get_container, require_kb_access
+from core.rbac import require_permission
 from db.models import AgentConfig
 
 router = APIRouter(prefix="/v1/agent", tags=["agent"])
@@ -61,13 +62,18 @@ async def list_agent_configs(
     kb_id: int,
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("agent:list")),
 ) -> list[AgentConfigOut]:
-    """列出某个知识库下当前用户的 Agent 配置。"""
+    """列出某知识库下当前用户租户的 Agent 配置。"""
     async with container.mysql.session() as session:
         await require_kb_access(kb_id, user, session)
         rows = await session.execute(
             select(AgentConfig)
-            .where(AgentConfig.kb_id == kb_id, AgentConfig.status == 1)
+            .where(
+                AgentConfig.kb_id == kb_id,
+                AgentConfig.status == 1,
+                AgentConfig.tenant_id == user.tenant_id,
+            )
             .order_by(AgentConfig.id)
         )
         return [_config_to_out(c) for c in rows.scalars().all()]
@@ -78,12 +84,14 @@ async def create_agent_config(
     payload: AgentConfigCreate,
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("agent:create")),
 ) -> AgentConfigOut:
-    """新建 Agent 配置（默认 `version=1, status=1`）。"""
+    """新建 Agent 配置（默认 `version=1, status=1`，tenant=user.tenant 贯标）。"""
     async with container.mysql.session() as session:
         await require_kb_access(payload.kb_id, user, session)
         cfg = AgentConfig(
             kb_id=payload.kb_id,
+            tenant_id=user.tenant_id,
             name=payload.name,
             graph_type=payload.graph_type,
             temperature=payload.temperature,

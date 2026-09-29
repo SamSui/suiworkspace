@@ -27,6 +27,7 @@ from api.schemas.kb import (
     KnowledgeBaseUpdate,
     kb_to_out,
 )
+from core.rbac import require_permission
 from db.models import KnowledgeBase
 
 router = APIRouter(prefix="/v1/kb", tags=["knowledge"])
@@ -36,11 +37,16 @@ router = APIRouter(prefix="/v1/kb", tags=["knowledge"])
 async def list_knowledge_bases(
     user: CurrentUser,
     session: DBSession,
+    _: None = Depends(require_permission("kb:list")),
 ) -> list[KnowledgeBaseOut]:
-    """列出当前用户的知识库（按 owner_id + status 过滤，隔离他人/已删库）。"""
+    """列出当前用户租户下的知识库（按 tenant_id + owner_id + status 过滤，隔离他人/已删库）。"""
     rows = await session.execute(
         select(KnowledgeBase)
-        .where(KnowledgeBase.owner_id == user.id, KnowledgeBase.status == 1)
+        .where(
+            KnowledgeBase.owner_id == user.id,
+            KnowledgeBase.status == 1,
+            KnowledgeBase.tenant_id == user.tenant_id,
+        )
         .order_by(KnowledgeBase.id)
     )
     return [kb_to_out(kb) for kb in rows.scalars().all()]
@@ -51,9 +57,15 @@ async def create_knowledge_base(
     payload: KnowledgeBaseCreate,
     user: CurrentUser,
     session: DBSession,
+    _: None = Depends(require_permission("kb:create")),
 ) -> KnowledgeBaseOut:
-    """创建知识库，owner 恒为当前用户。"""
-    kb = KnowledgeBase(name=payload.name, owner_id=int(user.id), status=1)
+    """创建知识库，owner 恒为当前用户，tenant 恒为当前用户所属租户（贯标）。"""
+    kb = KnowledgeBase(
+        name=payload.name,
+        owner_id=int(user.id),
+        tenant_id=user.tenant_id,
+        status=1,
+    )
     session.add(kb)
     await session.flush()
     await session.refresh(kb)  # 取 server_default 的 created_at（异步下禁属性懒加载）
@@ -61,7 +73,10 @@ async def create_knowledge_base(
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseOut)
-async def get_knowledge_base(kb: KnowledgeBase = Depends(kb_access)) -> KnowledgeBaseOut:
+async def get_knowledge_base(
+    kb: KnowledgeBase = Depends(kb_access),
+    _: None = Depends(require_permission("kb:read")),
+) -> KnowledgeBaseOut:
     return kb_to_out(kb)
 
 
@@ -69,12 +84,16 @@ async def get_knowledge_base(kb: KnowledgeBase = Depends(kb_access)) -> Knowledg
 async def update_knowledge_base(
     payload: KnowledgeBaseUpdate,
     kb: KnowledgeBase = Depends(kb_access),
+    _: None = Depends(require_permission("kb:update")),
 ) -> KnowledgeBaseOut:
     kb.name = payload.name
     return kb_to_out(kb)
 
 
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_knowledge_base(kb: KnowledgeBase = Depends(kb_access)) -> None:
+async def delete_knowledge_base(
+    kb: KnowledgeBase = Depends(kb_access),
+    _: None = Depends(require_permission("kb:delete")),
+) -> None:
     kb.status = 0
     return None

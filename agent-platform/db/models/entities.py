@@ -49,6 +49,9 @@ class User(Base, TimestampMixin):
     # 只存哈希，不存明文；轮换时整行替换
     api_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    # 多租户（SUIG-34）：用户所属租户；role_id 为冗余默认角色，供查询路径快速取权
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     knowledge_bases: Mapped[list[KnowledgeBase]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
@@ -64,6 +67,8 @@ class KnowledgeBase(Base, TimestampMixin):
     owner_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("user.id"), nullable=False
     )
+    # 多租户隔离（SUIG-34）：权威隔离字段，查询路径按 tenant_id 强制
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     owner: Mapped[User] = relationship(back_populates="knowledge_bases")
@@ -71,7 +76,10 @@ class KnowledgeBase(Base, TimestampMixin):
         back_populates="knowledge_base", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("idx_kb_owner", "owner_id"),)
+    __table_args__ = (
+        Index("idx_kb_owner", "owner_id"),
+        Index("idx_kb_tenant", "tenant_id"),
+    )
 
 
 class Document(Base, TimestampMixin):
@@ -81,6 +89,7 @@ class Document(Base, TimestampMixin):
     kb_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("knowledge_base.id"), nullable=False
     )
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     # sha256：同一 kb 内重传去重 + 摄入幂等
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -111,6 +120,7 @@ class Conversation(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("user.id"), nullable=False)
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     kb_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("knowledge_base.id"), nullable=True
     )
@@ -122,7 +132,11 @@ class Conversation(Base, TimestampMixin):
         back_populates="conversation", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("idx_conv_user", "user_id"), Index("idx_conv_thread", "thread_id"))
+    __table_args__ = (
+        Index("idx_conv_user", "user_id"),
+        Index("idx_conv_thread", "thread_id"),
+        Index("idx_conv_tenant", "tenant_id"),
+    )
 
 
 class Message(Base):
@@ -132,6 +146,7 @@ class Message(Base):
     conv_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("conversation.id"), nullable=False
     )
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # user / assistant / tool
     msg_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'text'"))
     # 命中切片 chunk_id 列表（JSON 数组），正文不入库
@@ -153,6 +168,7 @@ class AgentConfig(Base, TimestampMixin):
     __tablename__ = "agent_config"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     kb_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("knowledge_base.id"), nullable=False
     )
@@ -164,7 +180,76 @@ class AgentConfig(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
-    __table_args__ = (Index("idx_agent_kb", "kb_id"),)
+    __table_args__ = (
+        Index("idx_agent_kb", "kb_id"),
+        Index("idx_agent_tenant", "tenant_id"),
+    )
+
+
+class Tenant(Base, TimestampMixin):
+    """租户（SUIG-34 · P2 多租户 RBAC）。"""
+
+    __tablename__ = "sys_tenant"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+
+class Role(Base, TimestampMixin):
+    """角色（租户维度）。
+
+    `code` 与 tenant_id 组合唯一；`admin` 为内置管理员角色（拥有全部系统权限）。
+    """
+
+    __tablename__ = "sys_role"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uk_role_tenant_code"),
+        Index("idx_role_tenant", "tenant_id"),
+    )
+
+
+class Permission(Base, TimestampMixin):
+    """权限（tenant_id=0 为系统内置全局权限）。
+
+    `code` 全局唯一，如 `kb:read` / `doc:create`；业务路由以权限码寻址准入。
+    """
+
+    __tablename__ = "sys_permission"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+
+class UserRole(Base):
+    """用户-角色绑定（sys_user_role）。"""
+
+    __tablename__ = "sys_user_role"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    role_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RolePermission(Base):
+    """角色-权限绑定（sys_role_permission）。"""
+
+    __tablename__ = "sys_role_permission"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    permission_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 __all__ = [
@@ -174,5 +259,10 @@ __all__ = [
     "DocumentStatus",
     "KnowledgeBase",
     "Message",
+    "Permission",
+    "Role",
+    "RolePermission",
+    "Tenant",
     "User",
+    "UserRole",
 ]

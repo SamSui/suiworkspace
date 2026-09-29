@@ -19,6 +19,7 @@ from sqlalchemy import select
 from api.deps import current_user, get_container, require_kb_access
 from core.exceptions import NotFound
 from core.logging import get_logger
+from core.rbac import require_permission
 from db.models import Document
 
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ async def get_task(
     task_id: str,
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("task:read")),
 ) -> TaskOut:
     """查询摄入任务状态（与对应 `document.status` 严格一致）。"""
     try:

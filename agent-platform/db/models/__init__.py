@@ -7,7 +7,12 @@ from db.models.entities import (
     DocumentStatus,
     KnowledgeBase,
     Message,
+    Permission,
+    Role,
+    RolePermission,
+    Tenant,
     User,
+    UserRole,
 )
 
 __all__ = [
@@ -17,5 +22,10 @@ __all__ = [
     "DocumentStatus",
     "KnowledgeBase",
     "Message",
+    "Permission",
+    "Role",
+    "RolePermission",
+    "Tenant",
     "User",
+    "UserRole",
 ]

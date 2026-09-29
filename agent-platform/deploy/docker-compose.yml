@@ -25,8 +25,9 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      # 首次启动自动建表（6 张业务表 DDL）
+      # 首次启动自动建表（6 张业务表 DDL + SUIG-34 RBAC 多租户 DDL/迁移）
       - ../db/sql/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ../db/sql/02_rbac.sql:/docker-entrypoint-initdb.d/02_rbac.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
       interval: 10s

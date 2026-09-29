@@ -23,6 +23,7 @@ from sqlalchemy import delete, select
 from api.deps import current_user, get_container, require_kb_access
 from core.exceptions import NotFound, ValidationError
 from core.logging import get_logger
+from core.rbac import require_permission
 from core.storage import StorageContainer
 from core.storage.local import delete_upload, save_upload
 from db.models import Document, User
@@ -114,6 +115,7 @@ async def upload_document(
     file: UploadFile = File(...),
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("doc:upload")),
 ) -> DocumentOut:
     """上传文档并入队摄入。返回 202 与 `document(status=0)` 记录。
 
@@ -147,7 +149,11 @@ async def upload_document(
                 doc = existing
             else:
                 doc = Document(
-                    kb_id=kb_id, file_name=file.filename or "", file_hash=digest, status=0
+                    kb_id=kb_id,
+                    tenant_id=user.tenant_id,
+                    file_name=file.filename or "",
+                    file_hash=digest,
+                    status=0,
                 )
                 session.add(doc)
 
@@ -171,6 +177,7 @@ async def get_document(
     doc_id: int,
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("doc:read")),
 ) -> DocumentOut:
     doc = await _load_doc_for_owner(container, doc_id, user)
     return _doc_to_out(doc)
@@ -181,6 +188,7 @@ async def delete_document(
     doc_id: int,
     user=Depends(current_user),
     container=Depends(get_container),
+    _: None = Depends(require_permission("doc:delete")),
 ) -> None:
     """删除文档：清理库记录 + 落盘文件。
 

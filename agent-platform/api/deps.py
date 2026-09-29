@@ -22,6 +22,11 @@ from db.models import Conversation, KnowledgeBase, User
 logger = get_logger(__name__)
 
 
+def _tenant_mismatch(obj_tenant: int | None, user_tenant: int | None) -> bool:
+    """多租户隔离：两者均非空且不等 → 视为越权（跨租户）。NULL 视为未迁移，放行。"""
+    return obj_tenant is not None and user_tenant is not None and obj_tenant != user_tenant
+
+
 def get_container(request: Request) -> StorageContainer:
     container = getattr(request.app.state, "container", None)
     if container is None:  # pragma: no cover — 说明 lifespan 没跑起来
@@ -59,14 +64,21 @@ async def require_kb_access(
     user: User,
     session: AsyncSession,
 ) -> KnowledgeBase:
-    """查询路径强制权限校验：知识库必须属于当前用户。
+    """查询路径强制权限校验（SUIG-34 升级）：知识库必须属于当前用户的租户。
 
-    不存在与无权访问返回同一语义（404），避免通过状态码探测他人 kb_id 是否存在。
+    多租户隔离（裁决 #4 延伸）：查询路径以 `tenant_id`（权威）强制隔离，
+    并保留 `owner_id` 归属；两者之一不匹配即与不存在统一返回 404，
+    避免通过状态码探测他人 kb_id 是否存在。
     """
     stmt = select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
     kb = (await session.execute(stmt)).scalar_one_or_none()
 
-    if kb is None or kb.status != 1 or kb.owner_id != user.id:
+    if (
+        kb is None
+        or kb.status != 1
+        or kb.owner_id != user.id
+        or _tenant_mismatch(kb.tenant_id, user.tenant_id)
+    ):
         logger.info(
             "kb access denied",
             extra={"extra_fields": {"kb_id": kb_id, "user_id": user.id}},
@@ -99,10 +111,11 @@ Container = Annotated[StorageContainer, Depends(get_container)]
 async def require_thread_access(
     thread_id: str, user: User, session: AsyncSession
 ) -> Conversation:
-    """以 thread_id 取「当前用户拥有」的会话，供续接类路由做归属校验。
+    """以 thread_id 取「当前用户所属租户拥有」的会话，供续接类路由做归属校验。
 
-    只做归属校验（不接检索 / 生成逻辑）：该线程不存在、非当前用户所有或已停用，
-    统一抛 `NotFound(404)`——与知识库越权同语义，不泄漏他人 thread 是否存在。
+    只做归属校验（不接检索 / 生成逻辑）：该线程不存在、非当前用户所有、
+    属他人租户或已停用，统一抛 `NotFound(404)`——与知识库越权同语义，
+    不泄漏他人 thread 是否存在（SUIG-34 增加租户隔离）。
     由路由显式调用（普通函数，不带 FastAPI 依赖，避免与原 body 的 thread_id 冲突）。
 
     Returns:
@@ -111,7 +124,12 @@ async def require_thread_access(
     stmt = select(Conversation).where(Conversation.thread_id == thread_id)
     conv = (await session.execute(stmt)).scalar_one_or_none()
 
-    if conv is None or conv.status != "active" or conv.user_id != int(user.id):
+    if (
+        conv is None
+        or conv.status != "active"
+        or conv.user_id != int(user.id)
+        or _tenant_mismatch(conv.tenant_id, user.tenant_id)
+    ):
         logger.info(
             "thread access denied",
             extra={"extra_fields": {"thread_id": thread_id, "user_id": user.id}},
