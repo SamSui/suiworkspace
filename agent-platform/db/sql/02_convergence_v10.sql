@@ -1,104 +1,68 @@
--- SUIG-10 智能体中台 · MySQL 初始化 DDL
--- 权威表结构（与 db/models/entities.py 的 ORM 定义一致）。
--- 由 deploy/docker-compose.yml 挂载到 /docker-entrypoint-initdb.d/ 首次启动执行。
---
--- 铁律：MySQL 只存业务元数据，不存大文本与向量。
+-- SUIG-31 · P1.1 域模型收敛 V1.0（6 → 21 表增量迁移）
+-- ============================================================================
+-- 目标   ：在「既有 6 表」的 MySQL 库上增量收敛为 V1.0 的 21 表域模型。
+-- 前提   ：库内已有 01_schema.sql 建出的 6 表（user / knowledge_base /
+--          document / conversation / message / agent_config）。
+-- 兼容性 ：幂等重跑不报错；既存表数据不清空；既有 ORM / 单测不破坏。
+--   - `agent_config` → `agent` 演进改名（数据原样保留，`(改)` 标记）。
+--   - 新增 15 表：sys_tenant / sys_user / sys_role / sys_permission /
+--     agent_version / agent_tool / agent_knowledge / document_chunk /
+--     model / model_provider / tool / tool_permission / agent_run /
+--     agent_event / audit_log。
+-- 说明   ：MySQL 8 不支持 ADD COLUMN IF NOT EXISTS，用存储过程以
+--          information_schema 探测，保证幂等。
+-- 计量   ：最终 5 既有保留(user/kb/doc/conv/message) + 1 演进改名(agent) +
+--          15 新增 = 21 张表。
+-- ============================================================================
 
-CREATE DATABASE IF NOT EXISTS `agent_platform`
-  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE `agent_platform`;
 
 -- ---------------------------------------------------------------------------
--- 1. 用户
+-- 0. 工具过程（幂等辅助）
+--    __ensure_column：探测列存在性后才 ALTER（ADD COLUMN 幂等）。
+--    __ensure_index ：探测索引存在性后才 ADD INDEX。
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `user` (
-  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `name`       VARCHAR(64)     NOT NULL,
-  `api_key`    VARCHAR(64)     NOT NULL COMMENT '只存哈希，不存明文',
-  `status`     TINYINT         NOT NULL DEFAULT 1 COMMENT '1正常 0停用',
-  `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_user_api_key` (`api_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户';
+DROP PROCEDURE IF EXISTS `__SUIG31_ensure_column`;
+DELIMITER $$
+CREATE PROCEDURE `__SUIG31_ensure_column`(
+  IN p_table VARCHAR(64),
+  IN p_column VARCHAR(64),
+  IN p_ddl    VARCHAR(1024)
+)
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = p_table AND COLUMN_NAME = p_column
+  ) THEN
+    SET @sql := CONCAT('ALTER TABLE `', p_table, '` ADD COLUMN ', p_ddl);
+    PREPARE stmt FROM @sql;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
+
+DROP PROCEDURE IF EXISTS `__SUIG31_ensure_index`;
+DELIMITER $$
+CREATE PROCEDURE `__SUIG31_ensure_index`(IN p_tbl VARCHAR(64), IN p_idx VARCHAR(64), IN p_cols VARCHAR(512))
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = p_tbl AND INDEX_NAME = p_idx
+  ) THEN
+    SET @sql := CONCAT('ALTER TABLE `', p_tbl, '` ADD INDEX `', p_idx, '` (', p_cols, ')');
+    PREPARE stmt FROM @sql;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
 
 -- ---------------------------------------------------------------------------
--- 2. 知识库（owner_id 是权限校验的唯一依据）
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `knowledge_base` (
-  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `name`       VARCHAR(128)    NOT NULL,
-  `owner_id`   BIGINT UNSIGNED NOT NULL,
-  `tenant_id`  BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '多租户占位',
-  `status`     TINYINT         NOT NULL DEFAULT 1 COMMENT '1启用 0归档',
-  `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  KEY `idx_kb_owner` (`owner_id`),
-  KEY `idx_kb_tenant` (`tenant_id`),
-  CONSTRAINT `fk_kb_owner` FOREIGN KEY (`owner_id`) REFERENCES `user` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库';
-
--- ---------------------------------------------------------------------------
--- 3. 文档（status 是双写一致性的 source of truth）
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `document` (
-  `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `kb_id`       BIGINT UNSIGNED NOT NULL,
-  `file_name`   VARCHAR(255)    NOT NULL,
-  `file_hash`   CHAR(64)        NOT NULL COMMENT 'sha256：同库重传去重 + 摄入幂等',
-  `status`      TINYINT         NOT NULL DEFAULT 0 COMMENT '0未处理 1处理中 2完成 3失败',
-  `chunk_count` INT UNSIGNED    NOT NULL DEFAULT 0,
-  `error_msg`   VARCHAR(1024)   DEFAULT NULL,
-  `tenant_id`   BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '多租户占位',
-  `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_kb_hash` (`kb_id`, `file_hash`),
-  KEY `idx_doc_kb_status` (`kb_id`, `status`),
-  KEY `idx_doc_tenant` (`tenant_id`),
-  CONSTRAINT `fk_doc_kb` FOREIGN KEY (`kb_id`) REFERENCES `knowledge_base` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档元信息';
-
--- ---------------------------------------------------------------------------
--- 4. 会话（thread_id 是 LangGraph RedisSaver 的寻址键）
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `conversation` (
-  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `user_id`    BIGINT UNSIGNED NOT NULL,
-  `kb_id`      BIGINT UNSIGNED DEFAULT NULL,
-  `tenant_id`  BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '多租户占位',
-  `thread_id`  VARCHAR(64)     NOT NULL COMMENT '多实例共享状态的寻址键',
-  `status`     VARCHAR(16)     NOT NULL DEFAULT 'active',
-  `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  KEY `idx_conv_user` (`user_id`),
-  KEY `idx_conv_thread` (`thread_id`),
-  KEY `idx_conv_tenant` (`tenant_id`),
-  CONSTRAINT `fk_conv_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`),
-  CONSTRAINT `fk_conv_kb`   FOREIGN KEY (`kb_id`)   REFERENCES `knowledge_base` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话会话';
-
--- ---------------------------------------------------------------------------
--- 5. 消息元数据（正文不入库，只留摘要 + 命中切片引用）
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `message` (
-  `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `conv_id`      BIGINT UNSIGNED NOT NULL,
-  `role`         VARCHAR(16)     NOT NULL COMMENT 'user/assistant/tool',
-  `msg_type`     VARCHAR(16)     NOT NULL DEFAULT 'text',
-  `es_chunk_ref` JSON            DEFAULT NULL COMMENT '命中切片 chunk_id 列表',
-  `token_count`  INT UNSIGNED    NOT NULL DEFAULT 0,
-  `latency_ms`   INT UNSIGNED    NOT NULL DEFAULT 0,
-  `created_at`   DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  KEY `idx_msg_conv` (`conv_id`),
-  CONSTRAINT `fk_msg_conv` FOREIGN KEY (`conv_id`) REFERENCES `conversation` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='消息元数据';
-
--- ---------------------------------------------------------------------------
--- 6. Agent 定义（V1.0 收敛：由原 agent_config 演进改名，见 02_convergence_v10.sql）
+-- 1. agent_config → agent 演进改名（数据原样保留，幂等）
+--    1) 新表 agent 若不存在则建出（CREATE 幂等）；
+--    2) 把既有 agent_config 数据按原 id 迁入 agent（WHERE NOT EXISTS 防重跑重复）；
+--    3) 数据迁完后删旧表 agent_config（收敛完成）。
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `agent` (
   `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -119,11 +83,50 @@ CREATE TABLE IF NOT EXISTS `agent` (
   KEY `idx_agent_kb`     (`kb_id`),
   KEY `idx_agent_tenant` (`tenant_id`),
   CONSTRAINT `fk_agent_kb` FOREIGN KEY (`kb_id`) REFERENCES `knowledge_base` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent 定义';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent 定义（由 agent_config 演进）';
+
+-- 数据收敛：仅当库内确实存在旧表 agent_config 时才迁移数据并收尾。
+-- （全新安装时 01_schema 已建出 agent，无 agent_config，分支自动跳过，保证幂等。）
+DROP PROCEDURE IF EXISTS `__SUIG31_converge_agent_config`;
+DELIMITER $$
+CREATE PROCEDURE `__SUIG31_converge_agent_config`()
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_config'
+  ) THEN
+    -- 数据回填：既有 agent_config 数据原样迁入 agent（只补到空 id，防重跑重复）
+    INSERT INTO `agent` (`id`,`kb_id`,`name`,`graph_type`,`temperature`,`top_k`,`conf`,`version`,`status`)
+    SELECT ce.`id`, ce.`kb_id`, ce.`name`, ce.`graph_type`, ce.`temperature`, ce.`top_k`, ce.`conf`,
+           ce.`version`, ce.`status`
+    FROM `agent_config` AS ce
+    WHERE NOT EXISTS (SELECT 1 FROM `agent` AS a WHERE a.`id` = ce.`id`);
+
+    -- 收敛完成：移除旧表（数据已在上一步原样保留）
+    DROP TABLE IF EXISTS `agent_config`;
+  END IF;
+END$$
+DELIMITER ;
+CALL `__SUIG31_converge_agent_config`();
 
 -- ---------------------------------------------------------------------------
--- 7+. V1.0 收敛新增表（SUIG-31）——与 02_convergence_v10.sql 等价；既有库升级只跑 02。
+-- 2. 既有 4 表补 `tenant_id` 占位列 + 索引（幂等；不动既有数据）
+--    注：conversation 在 01_schema 中已有 thread_id 等，此处仅补 tenant_id 列。
 -- ---------------------------------------------------------------------------
+CALL `__SUIG31_ensure_column`('knowledge_base', 'tenant_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''多租户占位''');
+CALL `__SUIG31_ensure_column`('document',       'tenant_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''多租户占位''');
+CALL `__SUIG31_ensure_column`('conversation',   'tenant_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''多租户占位''');
+
+CALL `__SUIG31_ensure_index`('knowledge_base', 'idx_kb_tenant', '`tenant_id`');
+CALL `__SUIG31_ensure_index`('document',       'idx_doc_tenant', '`tenant_id`');
+CALL `__SUIG31_ensure_index`('conversation',   'idx_conv_tenant', '`tenant_id`');
+
+-- ---------------------------------------------------------------------------
+-- 3. 新增 15 表（CREATE TABLE IF NOT EXISTS 天然幂等）
+--    本小节所有表本轮仅 DDL 入库，未接入路由。
+-- ---------------------------------------------------------------------------
+
+-- 3.1 多租户 / 权限
 CREATE TABLE IF NOT EXISTS `sys_tenant` (
   `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `name`       VARCHAR(128)    NOT NULL,
@@ -158,7 +161,7 @@ CREATE TABLE IF NOT EXISTS `sys_role` (
   `description` VARCHAR(255)    DEFAULT NULL,
   `status`      TINYINT         NOT NULL DEFAULT 1,
   `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_role_code` (`code`),
   KEY `idx_sys_role_tenant` (`tenant_id`),
@@ -172,13 +175,14 @@ CREATE TABLE IF NOT EXISTS `sys_permission` (
   `code`       VARCHAR(128)    NOT NULL,
   `resource`   VARCHAR(128)    DEFAULT NULL COMMENT 'resource:action',
   `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_perm_code` (`code`),
   KEY `idx_sys_perm_tenant` (`tenant_id`),
   CONSTRAINT `fk_sys_perm_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `sys_tenant` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限点（DDL-only）';
 
+-- 3.2 Agent 版本 / 工具 / 知识绑定
 CREATE TABLE IF NOT EXISTS `tool` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `name`          VARCHAR(128)    NOT NULL,
@@ -189,7 +193,7 @@ CREATE TABLE IF NOT EXISTS `tool` (
   `status`        TINYINT         NOT NULL DEFAULT 1,
   `tenant_id`     BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   KEY `idx_tool_tenant` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工具（DDL-only）';
@@ -204,7 +208,7 @@ CREATE TABLE IF NOT EXISTS `agent_version` (
   `status`      TINYINT         NOT NULL DEFAULT 1,
   `tenant_id`   BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_agent_version` (`agent_id`, `version_no`),
   KEY `idx_agentver_tenant` (`tenant_id`),
@@ -219,7 +223,7 @@ CREATE TABLE IF NOT EXISTS `agent_tool` (
   `enabled`    TINYINT         NOT NULL DEFAULT 1,
   `tenant_id`  BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_agent_tool` (`agent_id`, `tool_id`),
   KEY `idx_agenttool_tenant` (`tenant_id`),
@@ -234,7 +238,7 @@ CREATE TABLE IF NOT EXISTS `agent_knowledge` (
   `enabled`    TINYINT         NOT NULL DEFAULT 1,
   `tenant_id`  BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_agent_kb` (`agent_id`, `kb_id`),
   KEY `idx_agentkb_tenant` (`tenant_id`),
@@ -242,6 +246,7 @@ CREATE TABLE IF NOT EXISTS `agent_knowledge` (
   CONSTRAINT `fk_agentkb_kb`   FOREIGN KEY (`kb_id`)   REFERENCES `knowledge_base` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent-知识库 绑定（DDL-only）';
 
+-- 3.3 文档切片元数据（对齐 ingest/chunker.py 的 Chunk 结构：index/text/token_count）
 CREATE TABLE IF NOT EXISTS `document_chunk` (
   `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `doc_id`      BIGINT UNSIGNED NOT NULL,
@@ -250,14 +255,15 @@ CREATE TABLE IF NOT EXISTS `document_chunk` (
   `token_count` INT             NOT NULL DEFAULT 0,
   `tenant_id`   BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_chunk_id` (`chunk_id`),
   KEY `idx_chunk_doc`    (`doc_id`),
   KEY `idx_chunk_tenant` (`tenant_id`),
   CONSTRAINT `fk_chunk_doc` FOREIGN KEY (`doc_id`) REFERENCES `document` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档切片元数据（DDL-only）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档切片元数据（原文只落 ES；DDL-only）';
 
+-- 3.5 模型供应商
 CREATE TABLE IF NOT EXISTS `model_provider` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `name`          VARCHAR(64)     NOT NULL,
@@ -266,11 +272,12 @@ CREATE TABLE IF NOT EXISTS `model_provider` (
   `api_key_ref`   VARCHAR(255)    DEFAULT NULL COMMENT '加密引用/掩码，不落明文',
   `status`        TINYINT         NOT NULL DEFAULT 1,
   `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_provider_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型供应商（DDL-only）';
 
+-- 3.5.2 模型（model）
 CREATE TABLE IF NOT EXISTS `model` (
   `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `provider_id` BIGINT UNSIGNED NOT NULL,
@@ -279,13 +286,14 @@ CREATE TABLE IF NOT EXISTS `model` (
   `status`      TINYINT         NOT NULL DEFAULT 1,
   `tenant_id`   BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_provider_model` (`provider_id`, `model_name`),
   KEY `idx_model_tenant` (`tenant_id`),
   CONSTRAINT `fk_model_provider` FOREIGN KEY (`provider_id`) REFERENCES `model_provider` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型（DDL-only）';
 
+-- 3.6 工具权限
 CREATE TABLE IF NOT EXISTS `tool_permission` (
   `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `role_id`    BIGINT UNSIGNED NOT NULL,
@@ -293,7 +301,7 @@ CREATE TABLE IF NOT EXISTS `tool_permission` (
   `level`      VARCHAR(16)     NOT NULL DEFAULT 'none',
   `tenant_id`  BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_role_tool` (`role_id`, `tool_id`),
   KEY `idx_toolperm_tenant` (`tenant_id`),
@@ -301,6 +309,7 @@ CREATE TABLE IF NOT EXISTS `tool_permission` (
   CONSTRAINT `fk_toolperm_tool` FOREIGN KEY (`tool_id`) REFERENCES `tool` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工具授权（DDL-only）';
 
+-- 3.7 Agent 运行 / 事件 / 审计
 CREATE TABLE IF NOT EXISTS `agent_run` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `run_id`        VARCHAR(64)     NOT NULL,
@@ -315,7 +324,7 @@ CREATE TABLE IF NOT EXISTS `agent_run` (
   `error_message` VARCHAR(1024)   DEFAULT NULL,
   `tenant_id`     BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uni_run_id` (`run_id`),
   KEY `idx_run_agent`  (`agent_id`),
@@ -354,3 +363,12 @@ CREATE TABLE IF NOT EXISTS `audit_log` (
   KEY `idx_audit_actor` (`actor_type`, `actor_id`),
   KEY `idx_audit_tenant` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志（只增；DDL-only）';
+
+-- ---------------------------------------------------------------------------
+-- 4. 收尾：清理工具过程（保持库面整洁；均为本脚本专有，后缀规避覆盖）
+-- ---------------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `__SUIG31_converge_agent_config`;
+DROP PROCEDURE IF EXISTS `__SUIG31_ensure_index`;
+DROP PROCEDURE IF EXISTS `__SUIG31_ensure_column`;
+
+-- 结束：此时应有 21 张表（5 既有 + agent 演进 + 15 新增）。

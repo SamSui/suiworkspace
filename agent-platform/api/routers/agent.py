@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from api.deps import current_user, get_container, require_kb_access
-from db.models import AgentConfig
+from db.models import Agent
 
 router = APIRouter(prefix="/v1/agent", tags=["agent"])
 
@@ -42,7 +42,7 @@ class AgentConfigOut(BaseModel):
     status: int
 
 
-def _config_to_out(cfg: AgentConfig) -> AgentConfigOut:
+def _config_to_out(cfg: Agent) -> AgentConfigOut:
     return AgentConfigOut(
         id=int(cfg.id),
         kb_id=int(cfg.kb_id),
@@ -66,9 +66,9 @@ async def list_agent_configs(
     async with container.mysql.session() as session:
         await require_kb_access(kb_id, user, session)
         rows = await session.execute(
-            select(AgentConfig)
-            .where(AgentConfig.kb_id == kb_id, AgentConfig.status == 1)
-            .order_by(AgentConfig.id)
+            select(Agent)
+            .where(Agent.kb_id == kb_id, Agent.status == 1)
+            .order_by(Agent.id)
         )
         return [_config_to_out(c) for c in rows.scalars().all()]
 
@@ -82,7 +82,7 @@ async def create_agent_config(
     """新建 Agent 配置（默认 `version=1, status=1`）。"""
     async with container.mysql.session() as session:
         await require_kb_access(payload.kb_id, user, session)
-        cfg = AgentConfig(
+        cfg = Agent(
             kb_id=payload.kb_id,
             name=payload.name,
             graph_type=payload.graph_type,

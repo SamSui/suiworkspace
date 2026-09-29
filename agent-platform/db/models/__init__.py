@@ -1,21 +1,58 @@
-"""ORM 实体导出。"""
+"""ORM 实体导出（V1.0 21 表收敛版，SUIG-31）。
+
+`AgentConfig` → `Agent`（`agent_config` → `agent` 演进改名，数据原样保留）。
+"""
 
 from db.models.entities import (
-    AgentConfig,
+    Agent,
+    AgentEvent,
+    AgentKnowledge,
+    AgentRun,
+    AgentStatus,
+    AgentTool,
+    AgentVersion,
+    AuditLog,
     Conversation,
     Document,
+    DocumentChunk,
     DocumentStatus,
     KnowledgeBase,
     Message,
+    Model,
+    ModelProvider,
+    RunStatus,
+    SysPermission,
+    SysRole,
+    SysTenant,
+    SysUser,
+    Tool,
+    ToolPermission,
     User,
 )
 
 __all__ = [
-    "AgentConfig",
+    "Agent",
+    "AgentEvent",
+    "AgentKnowledge",
+    "AgentRun",
+    "AgentStatus",
+    "AgentTool",
+    "AgentVersion",
+    "AuditLog",
     "Conversation",
     "Document",
+    "DocumentChunk",
     "DocumentStatus",
     "KnowledgeBase",
     "Message",
+    "Model",
+    "ModelProvider",
+    "RunStatus",
+    "SysPermission",
+    "SysRole",
+    "SysTenant",
+    "SysUser",
+    "Tool",
+    "ToolPermission",
     "User",
 ]
