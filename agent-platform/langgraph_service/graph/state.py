@@ -12,16 +12,9 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph.message import add_messages
 
-
-class RetrievedChunk(TypedDict):
-    """一条召回结果。只带引用与分数，正文按需回查 ES。"""
-
-    chunk_id: str
-    doc_id: str
-    kb_id: str
-    score: float
-    source: Literal["vector", "keyword", "fused"]
-    highlight: str | None
+# `RetrievedChunk` 已收敛到 `core.retrieval`（P1.2 独立检索服务与编排共用同一类型，
+# 避免两处重复定义漂移），此处重导出保持既有 `graph.state.RetrievedChunk` 导入兼容。
+from core.retrieval import RetrievedChunk  # noqa: F401
 
 
 class AgentState(TypedDict, total=False):
@@ -31,6 +24,7 @@ class AgentState(TypedDict, total=False):
     query: str
     user_id: int
     kb_id: str | None
+    tenant_id: str | None  # P1.2：独立检索服务标量过滤入参（多租户隔离，P2 接入后生效）
     thread_id: str
     trace_id: str
 

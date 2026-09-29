@@ -21,7 +21,9 @@ from __future__ import annotations
 from core.config import get_settings
 from core.exceptions import UpstreamError
 from core.logging import get_logger
-from langgraph_service.retrieval import _stub_embed
+
+# P1.2 检索/嵌入桩逻辑收敛到 core.retrieval（与独立检索服务同一来源，位级一致）。
+from core.retrieval import _stub_embed
 
 logger = get_logger(__name__)
 

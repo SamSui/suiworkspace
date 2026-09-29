@@ -43,6 +43,23 @@ logger = get_logger(__name__)
 _INCREMENT = "增量 3（langgraph 编排）"
 
 
+def _build_retrieval_client(settings: Any) -> Any | None:
+    """按配置构造独立检索服务客户端；URL 未配置/装配失败 → None（编排进程内回退）。"""
+    url = getattr(settings.app, "retrieval_service_url", "") or ""
+    if not url:
+        return None
+    try:
+        from retrieval_service import RetrievalClient
+
+        return RetrievalClient(url)
+    except Exception as exc:  # noqa: BLE001 — 客户端装配失败不阻断编排
+        logger.warning(
+            "retrieval client 装配失败，回落进程内检索",
+            extra={"extra_fields": {"error": str(exc)}},
+        )
+        return None
+
+
 class RunRequest(BaseModel):
     """`POST /v1/stream` 入参。模块级：FastAPI 需能解析为 body schema。"""
 
@@ -176,6 +193,8 @@ def create_app() -> FastAPI:
             "llm_client": llm_client,
             # 节点每吐一个 token 调一次；这里即时编码为 SSE 帧入队（与后续 done 同序列）
             "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
+            # P1.2：独立检索服务客户端（未配置则 None，节点回落进程内检索）
+            "retrieval_client": _build_retrieval_client(settings),
         }
         state: dict[str, Any] = {
             "query": payload.query,
@@ -245,6 +264,7 @@ def create_app() -> FastAPI:
             "settings": settings,
             "llm_client": request.app.state.llm_client,
             "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
+            "retrieval_client": _build_retrieval_client(settings),
         }
         run_task = asyncio.create_task(_resume_graph(graph, cfg, payload.value, box, queue))
 

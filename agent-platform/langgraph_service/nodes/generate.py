@@ -15,8 +15,8 @@ from typing import Any
 from langgraph.types import RunnableConfig
 
 from core.logging import get_logger
+from core.retrieval import text_hydrate
 from langgraph_service.graph.state import AgentState
-from langgraph_service.retrieval import text_hydrate
 
 logger = get_logger(__name__)
 

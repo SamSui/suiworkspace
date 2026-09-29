@@ -1,0 +1,24 @@
+# 智能体中台 · 独立检索服务镜像（进程组 ③）—— SUIG-32 P1.2
+# 构建：
+#   docker build -f deploy/Dockerfile.retrieval -t agent-retrieval:latest .
+# 运行（只对内网，由 langgraph_service 编排调用；依赖 ES/Milvus/Redis 存储）：
+#   docker run -p 8101:8101 --env-file .env agent-retrieval:latest
+# 健康检查对齐 `retrieval_service/app.py` 的 `/healthz`（存储不可用即 503）。
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /srv/agent-platform
+COPY . .
+RUN pip install --no-cache-dir -e ".[observability]"
+
+# 独立检索服务只依赖 ES/Milvus/Redis（读链路），无 MySQL / 队列。
+EXPOSE 8101
+CMD ["uvicorn", "retrieval_service.app:app", "--host", "0.0.0.0", "--port", "8101"]
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=5 \
+    CMD python -c "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8101/healthz',timeout=4).status==200 else 1)"

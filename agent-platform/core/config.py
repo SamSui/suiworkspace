@@ -39,6 +39,8 @@ class AppSettings(_Section):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     langgraph_service_url: str = "http://127.0.0.1:8100"
+    # P1.2 独立检索服务：编排进程经此 URL 调用；配置了才启用 HTTP 路径（否则进程内回退）。
+    retrieval_service_url: str = "http://127.0.0.1:8101"
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 120

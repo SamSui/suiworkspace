@@ -131,21 +131,28 @@ class MilvusStore(BaseStore):
         kb_id: str,
         top_k: int = 30,
         output_fields: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """按 kb_id 分区检索。
 
         kb_id 只作**检索提速**（partition），不作安全边界——权限在查询路径强制校验。
+        `tenant_id` 可选：非空时并入过滤表达式（P1.2 标量过滤；该字段随 P2 落库，
+        缺失时该过滤表达式与现有 kb 过滤并存，命中为空）。
         """
         client = self.client
         collection = self._settings.collection
         fields = output_fields or ["chunk_id", "doc_id", "kb_id", "content_len"]
+
+        filter_expr = f'kb_id == "{kb_id}"'
+        if tenant_id:
+            filter_expr += f' and tenant_id == "{tenant_id}"'
 
         def _run() -> list[list[dict[str, Any]]]:
             return client.search(
                 collection_name=collection,
                 data=[query_vector],
                 limit=top_k,
-                filter=f'kb_id == "{kb_id}"',
+                filter=filter_expr,
                 output_fields=fields,
                 search_params={"metric_type": "COSINE", "params": {"ef": 64}},
             )

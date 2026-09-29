@@ -145,14 +145,22 @@ class ESStore(BaseStore):
         kb_id: str,
         top_k: int = 30,
         highlight: bool = True,
+        tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """BM25 关键词召回。kb_id 作 term 过滤（检索优化，非安全边界）。"""
+        """BM25 关键词召回。kb_id 作 term 过滤（检索优化，非安全边界）。
+
+        `tenant_id` 可选：非空时并入 term 过滤（P1.2 标量过滤；多租户隔离随 P2
+        落库后生效，此处先打通查询路径，缺该字段时过滤结果为空，不抛错）。
+        """
         client = self.client
+        filters: list[dict[str, Any]] = [{"term": {"kb_id": kb_id}}]
+        if tenant_id:
+            filters.append({"term": {"tenant_id": tenant_id}})
         body: dict[str, Any] = {
             "query": {
                 "bool": {
                     "must": [{"match": {"text": {"query": query}}}],
-                    "filter": [{"term": {"kb_id": kb_id}}],
+                    "filter": filters,
                 }
             },
             "size": top_k,
