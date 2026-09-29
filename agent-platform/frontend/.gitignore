@@ -1,0 +1,24 @@
+# 依赖
+node_modules
+
+# 构建产物
+dist
+*.tsbuildinfo
+# tsc -b（project references）为配置文件产生的编译产物
+vite.config.js
+vite.config.d.ts
+
+# 日志 / 环境
+*.log
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
