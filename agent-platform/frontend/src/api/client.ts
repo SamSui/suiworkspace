@@ -203,8 +203,14 @@ export async function streamPost(
       }
       switch (event) {
         case 'token': {
-          const t = (payload as { token?: string } | null)?.token ?? String(payload ?? '')
-          handlers.onToken(t, (payload as Record<string, unknown>) ?? {})
+          // 契约收敛：后端 `sse.py` 的 token 事件 data 形为 `{"seq":N,"text":"..."}`，
+          // 字段是 `text`（非 `token`）。此处 `text` 优先，`token` 兼容旧桩/旧实现。
+          const p = payload as { text?: string; token?: string } | null | string
+          const text =
+            (p && typeof p === 'object' && typeof p.text === 'string' && p.text) ||
+            (p && typeof p === 'object' && typeof p.token === 'string' && p.token) ||
+            String(payload ?? '')
+          handlers.onToken(text, (payload as Record<string, unknown>) ?? {})
           break
         }
         case 'interrupt':

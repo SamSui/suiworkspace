@@ -52,6 +52,21 @@ interface ChatState {
 let counter = 0
 const uid = (p: string) => `${p}-${Date.now().toString(36)}-${(++counter).toString(36)}`
 
+/**
+ * 客户端生成唯一的 langgraph thread_id（长度 ≤64）。
+ * 后端 `done` 事件只回 `message_id`+`usage`，不回 `thread_id`；为避免新会话
+ * HITL 无 thread_id 可 resume，前端在首条消息时自生成并稳定复用同一线程 id。
+ * 若后端将来在事件里回显 thread_id，`onDone` 仍以其为准。
+ */
+function genThreadId(): string {
+  let b = ''
+  try {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) b = crypto.randomUUID().replace(/-/g, '')
+  } catch { b = '' }
+  if (!b) b = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`
+  return b.slice(0, 64) || `th-${Date.now().toString(36)}`
+}
+
 function patchMessage(
   threads: Thread[],
   threadId: string,
@@ -109,6 +124,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const abort = new AbortController()
     const cur = get().threads.find((t) => t.id === tid)!
+    // 新会话无 thread_id → 客户端自生成并持久到线程，供本次请求 + HITL resume 复用。
+    const resolvedTid = cur.thread_id ?? genThreadId()
     set({
       streaming: true,
       activeAbort: abort,
@@ -116,6 +133,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         t.id === tid
           ? {
               ...t,
+              thread_id: t.thread_id ?? resolvedTid,
               title: t.title === '新对话' ? content.slice(0, 16) : t.title,
               kb_id: opts.kb_id ?? t.kb_id,
               messages: [...t.messages, userMsg, aiMsg],
@@ -126,7 +144,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const params: ChatStreamParams = {
       query: content,
-      thread_id: cur.thread_id ?? null,
+      thread_id: resolvedTid,
       conversation_id: null,
       kb_id: opts.kb_id ?? cur.kb_id ?? null,
     }
