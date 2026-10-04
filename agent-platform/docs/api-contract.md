@@ -49,8 +49,27 @@ multipart/form-data：
 - `GET /v1/agent?kb_id=<id>`：列出该 kb 下当前用户配置（200）；越权/不存在 404；无 token 401。
 - `POST /v1/agent`：创建（201）；`kb_id` 归属校验；越权 404。
 
+## 2.6 RAG 引用「点击回原文」 `/v1/doc/{doc_id}/chunk/{chunk_id}`（SUIG-39）
+
+RAG 引用 `[N]` 点回原文的核心契约端点（前端终裁方案 A，薄透传）：
+
+- `GET /v1/doc/{doc_id}/chunk/{chunk_id}` → 200 `{"chunk_id","doc_id","kb_id","text"}`。
+- 底层复用 `core/storage/es.py` 的 `fetch_chunks` 从 ES 取正文，**无新检索逻辑 / 无新存储改动**。
+- 鉴权：Bearer JWT；文档级归属经 `require_kb_access`（与 `GET /v1/doc/{doc_id}` 同源 404 语义）。
+- 404 语义：文档不存在/越权、chunk 缺失、或 chunk 的 `doc_id`/`kb_id` 与文档不一致（跨文档/跨库越权）→ 统一 404，不泄漏他人切片是否存在；无 token → 401。
+
+## 2.7 RAG 引用事件透出（SSE `cite`，可选增强）
+
+`/v1/chat/stream` 生成流中、`token` 首帧之前追加引用事件（向后兼容，不改 token 文本格式）：
+
+- `event: cite`  data `{"seq":N,"ref":N,"chunk_id":"...","doc_id":<id>,"kb_id":<id>}`。
+- `ref` 即 LLM 内联 `[N]` 的下标：前端据此把 `[N]` 绑定到 `doc_id/chunk_id`，并以
+  `GET /v1/doc/{doc_id}/chunk/{chunk_id}` 拉取原文高亮。
+- 网关对编排逐字节透传，前端按需消费 `cite` 事件；既有 `token`/`interrupt`/`done`/`error` 契约不变。
+
 ## 变更记录
 
 | 版本 | 变更 |
 |---|---|
 | v0.1 | 增量 2.4/2.5 首次落地：`/v1/doc` 上传/查询/删除、`/v1/task/{id}`、`/v1/agent` 查询/创建 |
+| v0.2 | SUIG-39：新增 `GET /v1/doc/{doc_id}/chunk/{chunk_id}`；SSE 追加可选 `cite` 引用事件（向后兼容） |

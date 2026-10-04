@@ -5,6 +5,10 @@
 - `event: interrupt`  data: {"seq":N,"reason":"human_approval","payload":{...}}
 - `event: done`       data: {"seq":N,"message_id":123,"usage":{"prompt":..,"completion":..}}
 - `event: error`      data: {"seq":N,"code":"llm_timeout","message":"...","trace_id":"..."}
+- `event: cite`       data: {"seq":N,"ref":1,"chunk_id":"...","doc_id":123,"kb_id":8}
+  （SUIG-39 引用事件透出，向后兼容追加：把 `citations`/`[N]` 标注回链到
+   chunk_id + 来源 doc/kb，供前端填充来源卡片与「点击回原文」；网关字节透传，
+   不参与 token 文本格式。）
 - 心跳 `: ping`（保活，应对 LB 空闲掐断）
 
 `seq` 单调递增跨事件；`trace_id` 由调用方注入 error 事件并使链路贯穿。
@@ -46,6 +50,24 @@ class SSEEncoder:
 
     def token(self, text: str) -> str:
         return self.encode_event("token", {"text": text})
+
+    def cite(
+        self,
+        *,
+        ref: int,
+        chunk_id: str,
+        doc_id: str,
+        kb_id: str,
+    ) -> str:
+        return self.encode_event(
+            "cite",
+            {
+                "ref": ref,
+                "chunk_id": chunk_id,
+                "doc_id": doc_id,
+                "kb_id": kb_id,
+            },
+        )
 
     def interrupt(self, *, reason: str = "human_approval", payload: dict[str, Any] | None = None) -> str:  # noqa: E501 契约字段名长
         return self.encode_event("interrupt", {"reason": reason, "payload": payload or {}})

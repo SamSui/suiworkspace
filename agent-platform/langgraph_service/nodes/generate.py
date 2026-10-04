@@ -72,6 +72,23 @@ async def generate_node(
 
     usage: dict[str, Any] = {}
     citations: list[str] = [c["chunk_id"] for c in retrieved][: len(chunk_texts)]
+
+    # SUIG-39 引用事件透出：先把 `[N]`↔chunk_id/doc/kb 的映射以 `cite` 事件推给前端，
+    # 前端据此填充来源卡片并支持「点击回原文」；仅在流式启用时 emit，不改变 token 文本。
+    if emit is not None:
+        for i, c in enumerate(retrieved, start=1):
+            emit(
+                {
+                    "event": "cite",
+                    "cite": {
+                        "ref": i,
+                        "chunk_id": c["chunk_id"],
+                        "doc_id": str(c.get("doc_id") or ""),
+                        "kb_id": str(c.get("kb_id") or ""),
+                    },
+                }
+            )
+
     pieces: list[str] = []
 
     # 流式：边收 token 边经 emitter 外发；provider 归因取 client 记录

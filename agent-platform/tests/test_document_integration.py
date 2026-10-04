@@ -192,3 +192,38 @@ def test_agent_config_create_list(app_client) -> None:
 
     # 无 token -> 401
     assert app_client.get(f"/v1/agent?kb_id={kb_id}").status_code == 401
+
+
+def test_chunk_endpoint_semantics(app_client) -> None:
+    """SUIG-39 `GET /v1/doc/{id}/chunk/{chunk_id}` 语义覆盖。
+
+    在真实栈上验证 404/401 契约（chunk 未落库时统一 404，不泄漏存在性）；
+    真正返回 chunk 原文依赖 ingest 已把切片写入 ES，本测试不构建该数据，
+    只校验入口鉴权与归属/存在性的 404 语义。
+    """
+    ts = int(time.time())
+    token = _register_and_token(app_client, f"chunk_owner_{ts}")
+    token_b = _register_and_token(app_client, f"chunk_intruder_{ts}")
+    kb_id = _makes_kb(app_client, token, f"chunk_kb_{ts}")
+
+    up = _upload(app_client, token, kb_id, *_TXT)
+    assert up.status_code == 202, up.text
+    doc_id = int(up.json()["id"])
+
+    # 无 token -> 401
+    assert app_client.get(f"/v1/doc/{doc_id}/chunk/any-chunk").status_code == 401
+
+    # 归属校验：文档属于 token 的 kb -> 允许访问（chunk 未落库 -> 404 不泄漏存在性）
+    assert (
+        app_client.get(f"/v1/doc/{doc_id}/chunk/any-chunk", headers=_auth(token)).status_code == 404
+    )
+
+    # 越权：他人访问同一文档的 chunk（doc 归属校验）-> 404
+    assert (
+        app_client.get(f"/v1/doc/{doc_id}/chunk/any-chunk", headers=_auth(token_b)).status_code == 404
+    )
+
+    # 文档不存在 -> 404
+    assert (
+        app_client.get("/v1/doc/999999/chunk/any-chunk", headers=_auth(token)).status_code == 404
+    )

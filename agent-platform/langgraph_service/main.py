@@ -43,6 +43,19 @@ logger = get_logger(__name__)
 _INCREMENT = "增量 3（langgraph 编排）"
 
 
+def _dispatch_emit(enc: SSEEncoder, queue: asyncio.Queue[str], payload: dict) -> None:
+    """把节点发来的 `emit` 帧编码入队：`cite` 事件走引用透出，其余按 token 转发。
+
+    SUIG-39 引用事件透出：`generate` 节点在主 token 流之前 emit `{"event": "cite",
+    "cite": {...}}` 帧；这里与既有 token 共用一个 SSEEncoder 的 seq 序列入队，
+    网关字节透传，不参与 token 文本格式（对齐冻结契约向后兼容）。
+    """
+    if payload.get("event") == "cite":
+        queue.put_nowait(enc.cite(**payload["cite"]))
+    else:
+        queue.put_nowait(enc.token(payload["text"]))
+
+
 class RunRequest(BaseModel):
     """`POST /v1/stream` 入参。模块级：FastAPI 需能解析为 body schema。"""
 
@@ -175,7 +188,7 @@ def create_app() -> FastAPI:
             "settings": settings,
             "llm_client": llm_client,
             # 节点每吐一个 token 调一次；这里即时编码为 SSE 帧入队（与后续 done 同序列）
-            "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
+            "emit": lambda p: _dispatch_emit(enc, queue, p),
         }
         state: dict[str, Any] = {
             "query": payload.query,
@@ -244,7 +257,7 @@ def create_app() -> FastAPI:
             "container": container,
             "settings": settings,
             "llm_client": request.app.state.llm_client,
-            "emit": lambda p: queue.put_nowait(enc.token(p["text"])),
+            "emit": lambda p: _dispatch_emit(enc, queue, p),
         }
         run_task = asyncio.create_task(_resume_graph(graph, cfg, payload.value, box, queue))
 

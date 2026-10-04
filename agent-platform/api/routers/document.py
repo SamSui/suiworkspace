@@ -45,6 +45,27 @@ class DocumentOut(BaseModel):
     chunk_count: int = 0
 
 
+class ChunkOut(BaseModel):
+    """RAG 引用「点击回原文」的 chunk 原文契约（SUIG-39 方案 A）。
+
+    仅薄透传 ES 已存的正文切片，不引入新检索/存储改动；`chunk_id` 即
+    `graph state.citations` 里的引用回链键（前端据此把 `[N]` 标注拉成原文高亮）。
+    """
+
+    chunk_id: str
+    doc_id: int
+    kb_id: int
+    text: str
+
+
+def _as_int(value: object) -> int | None:
+    """宽容地把 ES 取值归一到 int；取不到/非法返回 None（用于归属二次核对）。"""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _doc_to_out(doc: Document) -> DocumentOut:
     return DocumentOut(
         id=int(doc.id),
@@ -193,3 +214,36 @@ async def delete_document(
         await session.execute(delete(Document).where(Document.id == doc_id))
     await asyncio.to_thread(delete_upload, container.settings, kb_id, file_hash)
     return None
+
+
+@router.get("/{doc_id}/chunk/{chunk_id}", response_model=ChunkOut)
+async def get_chunk(
+    doc_id: int,
+    chunk_id: str,
+    user=Depends(current_user),
+    container=Depends(get_container),
+) -> ChunkOut:
+    """按 chunk_id 从 ES 返回正文切片（SUIG-39 方案 A，薄透传）。
+
+    复用已有 `es.fetch_chunks`（无新检索逻辑、无新存储改动），鉴权与
+    `GET /v1/doc/{doc_id}` 同源：先经 `_load_doc_for_owner` 做文档级 kb 归属
+    校验（越权/不存在统一 404），再从 ES 取该 chunk。取回后再做一次归属二次
+    核对——所取 chunk 的 `doc_id`/`kb_id` 必须与 URL 的 `doc_id` 及所属 kb
+    一致，否则同样 404（不泄漏他人文档的切片是否存在，裁决 #4）。
+    """
+    doc = await _load_doc_for_owner(container, doc_id, user)
+    rows = await (container.es.fetch_chunks([chunk_id]))
+    if not rows:
+        raise NotFound("片段不存在")
+    row = rows[0]
+    # 归属二次核对：chunk 必须归属同 doc 同 kb，防止 cookie-cutter 越权片段
+    if _as_int(row.get("doc_id")) != int(doc.id) or _as_int(row.get("kb_id")) != int(
+        doc.kb_id
+    ):
+        raise NotFound("片段不存在")
+    return ChunkOut(
+        chunk_id=chunk_id,
+        doc_id=int(doc.id),
+        kb_id=int(doc.kb_id),
+        text=row.get("text", ""),
+    )
