@@ -1,0 +1,75 @@
+# 智能体中台 · 应用服务编排（小步② 起服务）
+# 三应用服务定义，接入既有的四库 infra（agent-platform 项目，网络 agent-platform_ap-net）。
+# 注意：infra 已在运行，本文件不含 infra；不重拉/重排 minio 等（其 tag 与运行实况已不一致）。
+# 应用容器经同一外部网络，按服务名直达 redis/milvus/elasticsearch/mysql。
+# 用法：
+#   docker compose -f deploy/docker-compose.apps.yml up -d
+
+name: agent-platform
+
+services:
+  langgraph_service:
+    image: agent-langgraph:latest
+    container_name: ap-langgraph
+    env_file:
+      - ../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      ES_HOSTS: http://elasticsearch:9200
+      MYSQL_HOST: mysql
+    ports:
+      - "8100:8100"
+    networks: [ap-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8100/healthz',timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 25s
+      retries: 10
+
+  api:
+    image: agent-api:latest
+    container_name: ap-api
+    ports:
+      - "8000:8000"
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      LANGGRAPH_SERVICE_URL: http://langgraph_service:8100
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      ES_HOSTS: http://elasticsearch:9200
+      MYSQL_HOST: mysql
+    env_file:
+      - ../.env
+    depends_on:
+      - langgraph_service
+    networks: [ap-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/healthz/live',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 25s
+      retries: 10
+
+  ingest:
+    image: agent-ingest:latest
+    container_name: ap-ingest
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      ES_HOSTS: http://elasticsearch:9200
+      MYSQL_HOST: mysql
+      INGEST_DATA_DIR: /srv/agent-platform/storage/uploads
+    env_file:
+      - ../.env
+    networks: [ap-net]
+
+networks:
+  ap-net:
+    external:
+      name: agent-platform_ap-net
