@@ -309,3 +309,13 @@ Five primitives only: **STARTED / CHECKPOINT / BLOCKED / DONE / FAILED**
 
 Single-agent task → `sessions_spawn` directly. One-off Q&A → message. Simple forwarding → no multi-step.
 Team Orchestration = sustained multi-agent collaboration only.
+
+## 团队协作约定：显式触发 / @mention（owner 2026-10-05 授权，全角色遵守）
+
+所有任务的下达与推进一律采用「显式触发 / @mention」：
+- 在对应 issue 上用 `@` 指定目标 agent，并写明「范围 / 前置 / 验收 / 需要的回执」。
+- `todo→in_progress` 等状态流转只记录进度，**不自动为该 agent 拉起 run，不作为触发依据**。
+- 只有显式 `@` 才算任务下达；无 `@` 的评论视为讨论/知悉，不默认承担执行。
+- 例外必须由 owner 书面显式覆盖后方可生效。
+
+- 落地：交任务 → 在目标 issue 显式 `@`；收到 `@` 即开工；前置缺失回 BLOCKED 并列出缺什么。
