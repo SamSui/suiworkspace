@@ -82,10 +82,11 @@ services:
     networks: [ap-net]
 
   minio:
-    # 注意：MinIO 会从 Docker Hub 下架旧 release tag。原先 pin 的
-    # RELEASE.2023-03-20T20-16-18Z 已拉不到（冒烟时才暴露）。
-    # 这里改用实测可拉取的版本，勿改回 latest。
-    image: minio/minio:RELEASE.2024-01-05T22-17-24Z
+    # 注意：MinIO 会从 Docker Hub 下架旧 release tag。官方 tag 已不可拉，
+    # 改为实测可拉取、与当前在跑实况一致的 derklaro 分发 tag（架构裁决② 放行）。
+    # ⚠️ 供应链风险登记：此为第三方非官方镜像。若长期使用，后续增量建议由 owner
+    #    审是否换回官方可用镜像 /私有化 MinIO（见 SUIG-45 裁决记录），勿改回 latest。
+    image: derklaro/minio:RELEASE.2025-10-15T17-29-55Z
     container_name: ap-minio
     environment:
       # MINIO_ACCESS_KEY/SECRET_KEY 已废弃，新版镜像要求 ROOT_*
